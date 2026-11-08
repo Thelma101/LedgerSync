@@ -1,4 +1,8 @@
 import { useState } from "react";
+import FormRow from "../components/FormRow";
+import TextInput from "../components/TextInput";
+import SelectInput from "../components/SelectInput";
+import TextArea from "../components/TextArea";
 
 interface Rule {
   id: string;
@@ -90,60 +94,6 @@ const INITIAL_RULES: Rule[] = [
 
 const CATEGORIES = ["All", "Matching", "Tolerance", "Timing", "Trade Finance", "Fraud / Error"];
 
-function FormRow({ label, children, note }: { label: string; children: React.ReactNode; note?: string }) {
-  return (
-    <div className="grid grid-cols-[200px_1fr] items-start gap-4 py-3 border-b border-[var(--border)]">
-      <div className="pt-2">
-        <label className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest block">{label}</label>
-        {note && <div className="font-mono text-[9px] text-[var(--muted-foreground)] mt-0.5 opacity-60">{note}</div>}
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function Input({ value, onChange, placeholder, type = "text" }: {
-  value: string; onChange: (v: string) => void; placeholder?: string; type?: string;
-}) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      placeholder={placeholder}
-      className="w-full bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] font-mono text-xs px-3 py-2 outline-none focus:border-[var(--primary)] placeholder-[var(--muted-foreground)] transition-colors"
-    />
-  );
-}
-
-function Select({ value, onChange, children }: {
-  value: string; onChange: (v: string) => void; children: React.ReactNode;
-}) {
-  return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      className="w-full bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] font-mono text-xs px-3 py-2 outline-none focus:border-[var(--primary)] transition-colors appearance-none cursor-pointer"
-    >
-      {children}
-    </select>
-  );
-}
-
-function Textarea({ value, onChange, rows = 3, placeholder }: {
-  value: string; onChange: (v: string) => void; rows?: number; placeholder?: string;
-}) {
-  return (
-    <textarea
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      rows={rows}
-      placeholder={placeholder}
-      className="w-full bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] font-mono text-xs px-3 py-2 outline-none focus:border-[var(--primary)] placeholder-[var(--muted-foreground)] transition-colors resize-none"
-    />
-  );
-}
-
 export default function RulesPage() {
   const [rules, setRules] = useState<Rule[]>(INITIAL_RULES);
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -202,13 +152,14 @@ export default function RulesPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* sub-nav */}
-      <div className="flex items-center justify-between px-5 border-b border-[var(--border)] bg-[#0d1117] h-9 shrink-0">
-        <div className="flex items-center gap-0 h-full">
+      <div className="flex items-center justify-between gap-3 px-3 sm:px-5 border-b border-[var(--border)] bg-[var(--card)] h-9 shrink-0">
+        <div role="group" aria-label="Filter by category" className="flex items-center gap-0 h-full min-w-0 overflow-x-auto">
           {CATEGORIES.map(c => (
             <button
               key={c}
               onClick={() => setCategoryFilter(c)}
-              className={`h-full px-3 font-mono text-[10px] tracking-widest border-r border-[var(--border)] transition-colors ${
+              aria-pressed={categoryFilter === c}
+              className={`h-full px-3 font-mono text-[11px] tracking-widest whitespace-nowrap border-r border-[var(--border)] transition-colors ${
                 categoryFilter === c ? "bg-[var(--secondary)] text-[var(--foreground)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
               }`}
             >
@@ -218,34 +169,34 @@ export default function RulesPage() {
         </div>
         <button
           onClick={() => { setShowNewForm(v => !v); setEditingId(null); }}
-          className="font-mono text-[10px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1 hover:opacity-90 transition-opacity"
+          className="shrink-0 whitespace-nowrap font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1 hover:opacity-90 transition-opacity"
         >
           {showNewForm ? "CANCEL" : "+ NEW RULE"}
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5">
         <div className="max-w-3xl space-y-3">
 
           {/* New rule form */}
           {showNewForm && (
             <div className="bg-[var(--card)] border border-[var(--primary)]/40">
               <div className="px-5 py-3 border-b border-[var(--border)] bg-[var(--secondary)] flex items-center justify-between">
-                <span className="font-mono text-[10px] text-[var(--primary)] uppercase tracking-widest">NEW RULE</span>
+                <span className="font-mono text-[11px] text-[var(--primary)] uppercase tracking-widest">NEW RULE</span>
               </div>
               <form onSubmit={addRule} className="px-5">
                 <FormRow label="Rule Name">
-                  <Input value={draft.name || ""} onChange={v => setDraftField("name", v)} placeholder="Descriptive rule name" />
+                  <TextInput value={draft.name || ""} onChange={v => setDraftField("name", v)} placeholder="Descriptive rule name" />
                 </FormRow>
                 <FormRow label="Category">
-                  <Select value={draft.category || "Matching"} onChange={v => setDraftField("category", v)}>
+                  <SelectInput value={draft.category || "Matching"} onChange={v => setDraftField("category", v)}>
                     {["Matching", "Tolerance", "Timing", "Trade Finance", "Fraud / Error"].map(c => (
                       <option key={c} value={c}>{c}</option>
                     ))}
-                  </Select>
+                  </SelectInput>
                 </FormRow>
                 <FormRow label="Condition Expression" note="Uses LedgerSync expression language">
-                  <Textarea
+                  <TextArea
                     value={draft.condition || ""}
                     onChange={v => setDraftField("condition", v)}
                     rows={3}
@@ -253,7 +204,7 @@ export default function RulesPage() {
                   />
                 </FormRow>
                 <FormRow label="Action">
-                  <Textarea
+                  <TextArea
                     value={draft.action || ""}
                     onChange={v => setDraftField("action", v)}
                     rows={2}
@@ -261,10 +212,10 @@ export default function RulesPage() {
                   />
                 </FormRow>
                 <FormRow label="Tolerance">
-                  <Input value={draft.tolerance || ""} onChange={v => setDraftField("tolerance", v)} placeholder="e.g. 0.50%, USD 100, 1 day" />
+                  <TextInput value={draft.tolerance || ""} onChange={v => setDraftField("tolerance", v)} placeholder="e.g. 0.50%, USD 100, 1 day" />
                 </FormRow>
                 <FormRow label="Priority">
-                  <Input type="number" value={String(draft.priority || "")} onChange={v => setDraftField("priority", parseInt(v) || 1)} placeholder="Lower = higher priority" />
+                  <TextInput type="number" value={String(draft.priority || "")} onChange={v => setDraftField("priority", parseInt(v) || 1)} placeholder="Lower = higher priority" />
                 </FormRow>
                 <div className="py-4 flex gap-2">
                   <button type="submit" className="font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-4 py-2 uppercase tracking-widest hover:opacity-90 transition-opacity">
@@ -288,57 +239,57 @@ export default function RulesPage() {
             >
               <div className="flex items-start gap-3 px-4 py-3">
                 {/* priority badge */}
-                <div className="font-mono text-[10px] text-[var(--muted-foreground)] w-6 pt-0.5 shrink-0">#{rule.priority}</div>
+                <div className="font-mono text-[11px] text-[var(--muted-foreground)] w-6 pt-0.5 shrink-0">#{rule.priority}</div>
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1.5">
                     <span className="font-mono text-xs font-bold text-[var(--foreground)]">{rule.name}</span>
-                    <span className="font-mono text-[9px] px-1.5 py-0.5 bg-[var(--secondary)] text-[var(--muted-foreground)] uppercase">
+                    <span className="font-mono text-[11px] px-1.5 py-0.5 bg-[var(--secondary)] text-[var(--muted-foreground)] uppercase">
                       {rule.category}
                     </span>
                     {saved === rule.id && (
-                      <span className="font-mono text-[10px] text-[var(--status-match)]">✓ SAVED</span>
+                      <span className="font-mono text-[11px] text-[var(--status-match)]">✓ SAVED</span>
                     )}
                   </div>
 
                   {editingId === rule.id ? (
                     <div>
                       <FormRow label="Condition">
-                        <Textarea value={draft.condition ?? rule.condition} onChange={v => setDraftField("condition", v)} rows={2} />
+                        <TextArea value={draft.condition ?? rule.condition} onChange={v => setDraftField("condition", v)} rows={2} />
                       </FormRow>
                       <FormRow label="Action">
-                        <Textarea value={draft.action ?? rule.action} onChange={v => setDraftField("action", v)} rows={2} />
+                        <TextArea value={draft.action ?? rule.action} onChange={v => setDraftField("action", v)} rows={2} />
                       </FormRow>
                       <FormRow label="Tolerance">
-                        <Input value={draft.tolerance ?? rule.tolerance} onChange={v => setDraftField("tolerance", v)} />
+                        <TextInput value={draft.tolerance ?? rule.tolerance} onChange={v => setDraftField("tolerance", v)} />
                       </FormRow>
                       <div className="py-3 flex gap-2">
-                        <button onClick={() => saveEdit(rule.id)} className="font-mono text-[10px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1.5 hover:opacity-90 transition-opacity">SAVE</button>
-                        <button onClick={() => setEditingId(null)} className="font-mono text-[10px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--secondary)] transition-colors">CANCEL</button>
+                        <button onClick={() => saveEdit(rule.id)} className="font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1.5 hover:opacity-90 transition-opacity">SAVE</button>
+                        <button onClick={() => setEditingId(null)} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--secondary)] transition-colors">CANCEL</button>
                       </div>
                     </div>
                   ) : (
                     <div className="space-y-1">
                       <div className="flex gap-2">
-                        <span className="font-mono text-[10px] text-[var(--muted-foreground)] w-20 shrink-0">CONDITION</span>
-                        <code className="font-mono text-[10px] text-[var(--foreground)] break-all">{rule.condition}</code>
+                        <span className="font-mono text-[11px] text-[var(--muted-foreground)] w-20 shrink-0">CONDITION</span>
+                        <code className="font-mono text-[11px] text-[var(--foreground)] break-all">{rule.condition}</code>
                       </div>
                       <div className="flex gap-2">
-                        <span className="font-mono text-[10px] text-[var(--muted-foreground)] w-20 shrink-0">ACTION</span>
-                        <code className="font-mono text-[10px] text-[var(--foreground)]">{rule.action}</code>
+                        <span className="font-mono text-[11px] text-[var(--muted-foreground)] w-20 shrink-0">ACTION</span>
+                        <code className="font-mono text-[11px] text-[var(--foreground)]">{rule.action}</code>
                       </div>
                       <div className="flex gap-2">
-                        <span className="font-mono text-[10px] text-[var(--muted-foreground)] w-20 shrink-0">TOLERANCE</span>
-                        <code className="font-mono text-[10px] text-[var(--primary)]">{rule.tolerance}</code>
+                        <span className="font-mono text-[11px] text-[var(--muted-foreground)] w-20 shrink-0">TOLERANCE</span>
+                        <code className="font-mono text-[11px] text-[var(--primary)]">{rule.tolerance}</code>
                       </div>
                     </div>
                   )}
 
                   <div className="flex gap-4 mt-2">
-                    <span className="font-mono text-[9px] text-[var(--muted-foreground)]">
+                    <span className="font-mono text-[11px] text-[var(--muted-foreground)]">
                       HITS: <span className="text-[var(--foreground)]">{rule.hitCount}</span>
                     </span>
-                    <span className="font-mono text-[9px] text-[var(--muted-foreground)]">
+                    <span className="font-mono text-[11px] text-[var(--muted-foreground)]">
                       LAST: <span className="text-[var(--foreground)]">{rule.lastHit === "—" ? "—" : new Date(rule.lastHit).toLocaleString()}</span>
                     </span>
                   </div>
@@ -351,13 +302,13 @@ export default function RulesPage() {
                       setEditingId(editingId === rule.id ? null : rule.id);
                       setShowNewForm(false);
                     }}
-                    className="font-mono text-[10px] text-[var(--primary)] border border-[var(--primary)]/30 px-2.5 py-1 hover:bg-[var(--primary)]/10 transition-colors"
+                    className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-2.5 py-1 hover:bg-[var(--primary)]/10 transition-colors"
                   >
                     EDIT
                   </button>
                   <button
                     onClick={() => toggleRule(rule.id)}
-                    className={`font-mono text-[10px] border px-2.5 py-1 transition-colors ${
+                    className={`font-mono text-[11px] border px-2.5 py-1 transition-colors ${
                       rule.enabled
                         ? "text-[var(--muted-foreground)] border-[var(--border)] hover:bg-[var(--secondary)]"
                         : "text-[var(--status-match)] border-[var(--status-match)]/30 hover:bg-[var(--status-match)]/10"

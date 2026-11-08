@@ -1,4 +1,6 @@
 import { useState } from "react";
+import Dialog from "./Dialog";
+import TextInput from "./TextInput";
 
 export interface NewRunConfig {
   ledgerFile: string;
@@ -25,29 +27,20 @@ export default function NewRunModal({
     onSubmit({ ledgerFile: ledgerFile.trim(), settlementFile: settlementFile.trim(), runDate });
   }
 
-  const inputClass =
-    "w-full bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] font-mono text-xs px-3 py-2 outline-none focus:border-[var(--primary)] placeholder-[var(--muted-foreground)] transition-colors";
-  const labelClass = "block font-mono text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1";
+  const labelClass = "block font-mono text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
-      <form
-        onSubmit={handleSubmit}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="new-run-title"
-        className="relative w-[480px] max-w-[calc(100vw-2rem)] bg-[#0d1117] border border-[var(--border)]"
-      >
+    <Dialog onClose={onClose} labelledBy="new-run-title" className="max-w-[480px]">
+      <form onSubmit={handleSubmit}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border)]">
-          <div id="new-run-title" className="font-mono text-xs text-[var(--muted-foreground)] uppercase tracking-widest">
+          <h2 id="new-run-title" className="font-mono text-xs text-[var(--muted-foreground)] uppercase tracking-widest">
             New Reconciliation Run
-          </div>
+          </h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-mono transition-colors"
+            className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-mono text-lg leading-none px-1 transition-colors"
           >
             ×
           </button>
@@ -56,26 +49,20 @@ export default function NewRunModal({
         <div className="px-5 py-4 space-y-4">
           <div>
             <label htmlFor="run-date" className={labelClass}>Run Date</label>
-            <input id="run-date" type="date" value={runDate} onChange={(e) => setRunDate(e.target.value)} className={inputClass} />
+            <TextInput id="run-date" type="date" value={runDate} onChange={setRunDate} required />
           </div>
           <div>
             <label htmlFor="ledger-file" className={labelClass}>Ledger File</label>
-            <input
-              id="ledger-file"
-              value={ledgerFile}
-              onChange={(e) => setLedgerFile(e.target.value)}
-              placeholder="ledger_2026-08-25.csv"
-              className={inputClass}
-            />
+            <TextInput id="ledger-file" value={ledgerFile} onChange={setLedgerFile} placeholder="ledger_2026-08-25.csv" required />
           </div>
           <div>
             <label htmlFor="settlement-file" className={labelClass}>Settlement File</label>
-            <input
+            <TextInput
               id="settlement-file"
               value={settlementFile}
-              onChange={(e) => setSettlementFile(e.target.value)}
+              onChange={setSettlementFile}
               placeholder="nibss_eft_20260825.txt"
-              className={inputClass}
+              required
             />
           </div>
         </div>
@@ -97,6 +84,6 @@ export default function NewRunModal({
           </button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }
