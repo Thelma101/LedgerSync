@@ -3,6 +3,7 @@ import FormRow from "../components/FormRow";
 import TextInput from "../components/TextInput";
 import SelectInput from "../components/SelectInput";
 import Toggle from "../components/Toggle";
+import { SETTINGS_TABS, type SettingsTab } from "../lib/route";
 
 function SectionHeader({ title, description }: { title: string; description: string }) {
   return (
@@ -34,74 +35,83 @@ function SaveBar({ dirty, onSave, onDiscard, saved }: {
   );
 }
 
-const TABS = ["GENERAL", "DATA SOURCES", "NOTIFICATIONS", "SECURITY", "API"] as const;
-type Tab = typeof TABS[number];
+const DEFAULT_SETTINGS = {
+  orgName: "Meridian Capital & Trust Nigeria Ltd",
+  timezone: "Africa/Lagos",
+  currency: "NGN",
+  fiscalYearEnd: "12-31",
+  retentionDays: "90",
+  autoRun: true,
+  autoRunTime: "17:00",
+  breakThreshold: "100",
+  ledgerType: "sftp",
+  ledgerHost: "sftp.meridian-ledger.ng",
+  ledgerPath: "/exports/ledger/daily/*.csv",
+  ledgerUser: "recon_svc",
+  stlmtType: "nibss",
+  swiftBic: "MRDNNGLA",
+  swiftQueue: "NIBSS_NIP_INBOUND",
+  dateFormat: "YYYY-MM-DD",
+  notifyOnComplete: true,
+  notifyOnMismatch: true,
+  notifyOnMissing: true,
+  notifyOnFailure: true,
+  mismatchThreshold: "5",
+  slackWebhook: "https://hooks.slack.com/services/T00000/B00000/XXXXXXX",
+  emailRecipients: "controller@meridian.ng, cfo@meridian.ng",
+  pagerdutyKey: "",
+  mfaRequired: true,
+  ssoEnabled: true,
+  ssoProvider: "okta",
+  sessionTimeout: "480",
+  ipAllowlist: "10.0.0.0/8, 172.16.0.0/12",
+  auditLogRetention: "365",
+  apiEnabled: true,
+  rateLimit: "1000",
+  webhookUrl: "https://api.meridian.ng/ledgersync/webhook",
+  webhookSecret: "wh_sec_••••••••••••••••",
+};
 
-export default function SettingsPage() {
-  const [tab, setTab] = useState<Tab>("GENERAL");
-  const [dirty, setDirty] = useState(false);
+type Settings = typeof DEFAULT_SETTINGS;
+
+export default function SettingsPage({
+  tab,
+  onTabChange,
+}: {
+  tab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
+}) {
+  const [committed, setCommitted] = useState<Settings>(DEFAULT_SETTINGS);
+  const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
   const [saved, setSaved] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(committed);
 
-  function mark() { setDirty(true); setSaved(false); }
-  function save() { setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2500); }
-  function discard() { setDirty(false); }
+  function set<K extends keyof Settings>(k: K) {
+    return (v: Settings[K]) => {
+      setDraft((d) => ({ ...d, [k]: v }));
+      setSaved(false);
+    };
+  }
 
-  // General
-  const [orgName, setOrgName] = useState("Meridian Capital & Trust Nigeria Ltd");
-  const [timezone, setTimezone] = useState("Africa/Lagos");
-  const [currency, setCurrency] = useState("NGN");
-  const [fiscalYearEnd, setFiscalYearEnd] = useState("12-31");
-  const [retentionDays, setRetentionDays] = useState("90");
-  const [autoRun, setAutoRun] = useState(true);
-  const [autoRunTime, setAutoRunTime] = useState("17:00");
-  const [breakThreshold, setBreakThreshold] = useState("100");
+  function save() {
+    setCommitted(draft);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
 
-  // Data sources
-  const [ledgerType, setLedgerType] = useState("sftp");
-  const [ledgerHost, setLedgerHost] = useState("sftp.meridian-ledger.ng");
-  const [ledgerPath, setLedgerPath] = useState("/exports/ledger/daily/*.csv");
-  const [ledgerUser, setLedgerUser] = useState("recon_svc");
-  const [stlmtType, setStlmtType] = useState("nibss");
-  const [swiftBic, setSwiftBic] = useState("MRDNNGLA");
-  const [swiftQueue, setSwiftQueue] = useState("NIBSS_NIP_INBOUND");
-  const [dateFormat, setDateFormat] = useState("YYYY-MM-DD");
-
-  // Notifications
-  const [notifyOnComplete, setNotifyOnComplete] = useState(true);
-  const [notifyOnMismatch, setNotifyOnMismatch] = useState(true);
-  const [notifyOnMissing, setNotifyOnMissing] = useState(true);
-  const [notifyOnFailure, setNotifyOnFailure] = useState(true);
-  const [mismatchThreshold, setMismatchThreshold] = useState("5");
-  const [slackWebhook, setSlackWebhook] = useState("https://hooks.slack.com/services/T00000/B00000/XXXXXXX");
-  const [emailRecipients, setEmailRecipients] = useState("controller@meridian.ng, cfo@meridian.ng");
-  const [pagerdutyKey, setPagerdutyKey] = useState("");
-
-  // Security
-  const [mfaRequired, setMfaRequired] = useState(true);
-  const [ssoEnabled, setSsoEnabled] = useState(true);
-  const [ssoProvider, setSsoProvider] = useState("okta");
-  const [sessionTimeout, setSessionTimeout] = useState("480");
-  const [ipAllowlist, setIpAllowlist] = useState("10.0.0.0/8, 172.16.0.0/12");
-  const [auditLogRetention, setAuditLogRetention] = useState("365");
-
-  // API
-  const [apiEnabled, setApiEnabled] = useState(true);
-  const [rateLimit, setRateLimit] = useState("1000");
-  const [webhookUrl, setWebhookUrl] = useState("https://api.meridian.ng/ledgersync/webhook");
-  const [webhookSecret, setWebhookSecret] = useState("wh_sec_••••••••••••••••");
-
-  function w<T>(setter: (v: T) => void) {
-    return (v: T) => { setter(v); mark(); };
+  function discard() {
+    setDraft(committed);
+    setSaved(false);
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden w-full min-h-0">
       {/* sub-nav */}
       <div className="flex items-center gap-0 px-3 sm:px-5 border-b border-[var(--border)] bg-[var(--card)] h-9 shrink-0 overflow-x-auto">
-        {TABS.map(t => (
+        {SETTINGS_TABS.map(t => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => onTabChange(t)}
             aria-pressed={tab === t}
             className={`h-full px-4 font-mono text-[11px] tracking-widest whitespace-nowrap border-r border-[var(--border)] transition-colors ${
               tab === t ? "bg-[var(--secondary)] text-[var(--foreground)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -121,28 +131,28 @@ export default function SettingsPage() {
               <SectionHeader title="General Settings" description="Organization profile, run behavior, and data retention." />
               <div className="bg-[var(--card)] border border-[var(--border)] px-5">
                 <FormRow label="Organization Name">
-                  <TextInput value={orgName} onChange={w(setOrgName)} placeholder="Your organization" />
+                  <TextInput value={draft.orgName} onChange={set("orgName")} placeholder="Your organization" />
                 </FormRow>
                 <FormRow label="Default Timezone">
-                  <SelectInput value={timezone} onChange={w(setTimezone)}>
+                  <SelectInput value={draft.timezone} onChange={set("timezone")}>
                     {["Africa/Lagos", "UTC", "America/New_York", "Europe/London", "Europe/Frankfurt", "Asia/Dubai", "Asia/Singapore"].map(z => (
                       <option key={z} value={z}>{z}</option>
                     ))}
                   </SelectInput>
                 </FormRow>
                 <FormRow label="Base Currency">
-                  <SelectInput value={currency} onChange={w(setCurrency)}>
+                  <SelectInput value={draft.currency} onChange={set("currency")}>
                     {["NGN", "USD", "EUR", "GBP", "GHS", "ZAR", "KES", "XOF"].map(c => (
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </SelectInput>
                 </FormRow>
                 <FormRow label="Fiscal Year End" note="MM-DD format">
-                  <TextInput value={fiscalYearEnd} onChange={w(setFiscalYearEnd)} placeholder="12-31" />
+                  <TextInput value={draft.fiscalYearEnd} onChange={set("fiscalYearEnd")} placeholder="12-31" />
                 </FormRow>
                 <FormRow label="Report Retention" note="Days to keep generated reports">
                   <div className="flex items-center gap-2">
-                    <TextInput value={retentionDays} onChange={w(setRetentionDays)} type="number" />
+                    <TextInput value={draft.retentionDays} onChange={set("retentionDays")} type="number" />
                     <span className="font-mono text-[11px] text-[var(--muted-foreground)] shrink-0">days</span>
                   </div>
                 </FormRow>
@@ -152,21 +162,21 @@ export default function SettingsPage() {
                 <div className="py-3 border-b border-[var(--border)]">
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest mb-3">Automated Reconciliation</div>
                   <Toggle
-                    checked={autoRun}
-                    onChange={w(setAutoRun)}
+                    checked={draft.autoRun}
+                    onChange={set("autoRun")}
                     label="Enable daily auto-run"
                     description="Automatically trigger reconciliation at the scheduled time each business day."
                   />
                 </div>
-                {autoRun && (
-                  <FormRow label="Run Time (UTC)">
-                    <TextInput type="time" value={autoRunTime} onChange={w(setAutoRunTime)} />
+                {draft.autoRun && (
+                  <FormRow label="Run Time" note={draft.timezone}>
+                    <TextInput type="time" value={draft.autoRunTime} onChange={set("autoRunTime")} />
                   </FormRow>
                 )}
                 <FormRow label="Break Amount Threshold" note="Minimum delta to flag as mismatch">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[11px] text-[var(--muted-foreground)]">$</span>
-                    <TextInput value={breakThreshold} onChange={w(setBreakThreshold)} type="number" placeholder="0.01" />
+                    <span className="font-mono text-[11px] text-[var(--muted-foreground)]">{draft.currency === "NGN" ? "₦" : draft.currency}</span>
+                    <TextInput value={draft.breakThreshold} onChange={set("breakThreshold")} type="number" placeholder="0.01" />
                   </div>
                 </FormRow>
               </div>
@@ -182,7 +192,7 @@ export default function SettingsPage() {
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest">Ledger Source</div>
                 </div>
                 <FormRow label="Connection Type">
-                  <SelectInput value={ledgerType} onChange={w(setLedgerType)}>
+                  <SelectInput value={draft.ledgerType} onChange={set("ledgerType")}>
                     <option value="sftp">SFTP</option>
                     <option value="s3">AWS S3</option>
                     <option value="azure_blob">Azure Blob Storage</option>
@@ -190,16 +200,16 @@ export default function SettingsPage() {
                     <option value="manual">Manual Upload</option>
                   </SelectInput>
                 </FormRow>
-                {ledgerType === "sftp" && (
+                {draft.ledgerType === "sftp" && (
                   <>
                     <FormRow label="Host">
-                      <TextInput value={ledgerHost} onChange={w(setLedgerHost)} placeholder="sftp.host.internal" />
+                      <TextInput value={draft.ledgerHost} onChange={set("ledgerHost")} placeholder="sftp.host.internal" />
                     </FormRow>
                     <FormRow label="Remote Path" note="Glob patterns supported">
-                      <TextInput value={ledgerPath} onChange={w(setLedgerPath)} placeholder="/exports/**/*.csv" />
+                      <TextInput value={draft.ledgerPath} onChange={set("ledgerPath")} placeholder="/exports/**/*.csv" />
                     </FormRow>
                     <FormRow label="Username">
-                      <TextInput value={ledgerUser} onChange={w(setLedgerUser)} />
+                      <TextInput value={draft.ledgerUser} onChange={set("ledgerUser")} />
                     </FormRow>
                     <FormRow label="Private Key" note="PEM-encoded RSA or Ed25519 key">
                       <button className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors">
@@ -210,7 +220,7 @@ export default function SettingsPage() {
                   </>
                 )}
                 <FormRow label="Date Format">
-                  <SelectInput value={dateFormat} onChange={w(setDateFormat)}>
+                  <SelectInput value={draft.dateFormat} onChange={set("dateFormat")}>
                     {["YYYY-MM-DD", "DD/MM/YYYY", "MM/DD/YYYY", "YYYYMMDD"].map(f => (
                       <option key={f} value={f}>{f}</option>
                     ))}
@@ -228,7 +238,7 @@ export default function SettingsPage() {
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest">Settlement Source</div>
                 </div>
                 <FormRow label="Protocol">
-                  <SelectInput value={stlmtType} onChange={w(setStlmtType)}>
+                  <SelectInput value={draft.stlmtType} onChange={set("stlmtType")}>
                     <option value="nibss">NIBSS EFT / NIP</option>
                     <option value="swift">SWIFT MT940 / MT942</option>
                     <option value="camt">CAMT.053 (ISO 20022)</option>
@@ -237,23 +247,23 @@ export default function SettingsPage() {
                     <option value="api">REST API</option>
                   </SelectInput>
                 </FormRow>
-                {stlmtType === "nibss" && (
+                {draft.stlmtType === "nibss" && (
                   <>
                     <FormRow label="Bank BIC / SWIFT" note="CBN-assigned NIBSS participant code">
-                      <TextInput value={swiftBic} onChange={w(setSwiftBic)} placeholder="MRDNNGLA" />
+                      <TextInput value={draft.swiftBic} onChange={set("swiftBic")} placeholder="MRDNNGLA" />
                     </FormRow>
                     <FormRow label="Inbound Queue">
-                      <TextInput value={swiftQueue} onChange={w(setSwiftQueue)} placeholder="NIBSS_NIP_INBOUND" />
+                      <TextInput value={draft.swiftQueue} onChange={set("swiftQueue")} placeholder="NIBSS_NIP_INBOUND" />
                     </FormRow>
                   </>
                 )}
-                {stlmtType === "swift" && (
+                {draft.stlmtType === "swift" && (
                   <>
                     <FormRow label="BIC Code">
-                      <TextInput value={swiftBic} onChange={w(setSwiftBic)} placeholder="BANKNGLA" />
+                      <TextInput value={draft.swiftBic} onChange={set("swiftBic")} placeholder="BANKNGLA" />
                     </FormRow>
                     <FormRow label="Message Queue">
-                      <TextInput value={swiftQueue} onChange={w(setSwiftQueue)} placeholder="MT940_INBOUND" />
+                      <TextInput value={draft.swiftQueue} onChange={set("swiftQueue")} placeholder="MT940_INBOUND" />
                     </FormRow>
                   </>
                 )}
@@ -274,14 +284,14 @@ export default function SettingsPage() {
                 <div className="py-3 border-b border-[var(--border)]">
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest mb-3">Trigger Events</div>
                   <div className="space-y-3">
-                    <Toggle checked={notifyOnComplete} onChange={w(setNotifyOnComplete)} label="Run completed" description="Send notification when a reconciliation run finishes." />
-                    <Toggle checked={notifyOnMismatch} onChange={w(setNotifyOnMismatch)} label="Mismatch threshold exceeded" description="Alert when mismatch count exceeds the configured threshold." />
-                    <Toggle checked={notifyOnMissing} onChange={w(setNotifyOnMissing)} label="Missing entries detected" description="Alert when settlement or ledger entries are absent." />
-                    <Toggle checked={notifyOnFailure} onChange={w(setNotifyOnFailure)} label="Run failure" description="Alert immediately if a reconciliation run errors out." />
+                    <Toggle checked={draft.notifyOnComplete} onChange={set("notifyOnComplete")} label="Run completed" description="Send notification when a reconciliation run finishes." />
+                    <Toggle checked={draft.notifyOnMismatch} onChange={set("notifyOnMismatch")} label="Mismatch threshold exceeded" description="Alert when mismatch count exceeds the configured threshold." />
+                    <Toggle checked={draft.notifyOnMissing} onChange={set("notifyOnMissing")} label="Missing entries detected" description="Alert when settlement or ledger entries are absent." />
+                    <Toggle checked={draft.notifyOnFailure} onChange={set("notifyOnFailure")} label="Run failure" description="Alert immediately if a reconciliation run errors out." />
                   </div>
                 </div>
                 <FormRow label="Mismatch Alert Threshold" note="Alert when mismatch count ≥ this value">
-                  <TextInput value={mismatchThreshold} onChange={w(setMismatchThreshold)} type="number" placeholder="5" />
+                  <TextInput value={draft.mismatchThreshold} onChange={set("mismatchThreshold")} type="number" placeholder="5" />
                 </FormRow>
               </div>
 
@@ -290,13 +300,13 @@ export default function SettingsPage() {
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest">Delivery Channels</div>
                 </div>
                 <FormRow label="Email Recipients" note="Comma-separated addresses">
-                  <TextInput value={emailRecipients} onChange={w(setEmailRecipients)} placeholder="user@company.com, user2@company.com" />
+                  <TextInput value={draft.emailRecipients} onChange={set("emailRecipients")} placeholder="user@company.com, user2@company.com" />
                 </FormRow>
                 <FormRow label="Slack Webhook URL">
-                  <TextInput value={slackWebhook} onChange={w(setSlackWebhook)} placeholder="https://hooks.slack.com/services/..." />
+                  <TextInput value={draft.slackWebhook} onChange={set("slackWebhook")} placeholder="https://hooks.slack.com/services/..." />
                 </FormRow>
                 <FormRow label="PagerDuty Integration Key" note="Routing key for critical failures only">
-                  <TextInput value={pagerdutyKey} onChange={w(setPagerdutyKey)} placeholder="••••••••••••••••••••••••••••••••" type="password" />
+                  <TextInput value={draft.pagerdutyKey} onChange={set("pagerdutyKey")} placeholder="••••••••••••••••••••••••••••••••" type="password" />
                 </FormRow>
               </div>
             </>
@@ -310,13 +320,13 @@ export default function SettingsPage() {
                 <div className="py-3 border-b border-[var(--border)]">
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest mb-3">Authentication</div>
                   <div className="space-y-3">
-                    <Toggle checked={mfaRequired} onChange={w(setMfaRequired)} label="Require MFA for all users" description="Enforce TOTP or hardware key for every login." />
-                    <Toggle checked={ssoEnabled} onChange={w(setSsoEnabled)} label="Enable SSO" description="Delegate authentication to your identity provider." />
+                    <Toggle checked={draft.mfaRequired} onChange={set("mfaRequired")} label="Require MFA for all users" description="Enforce TOTP or hardware key for every login." />
+                    <Toggle checked={draft.ssoEnabled} onChange={set("ssoEnabled")} label="Enable SSO" description="Delegate authentication to your identity provider." />
                   </div>
                 </div>
-                {ssoEnabled && (
+                {draft.ssoEnabled && (
                   <FormRow label="SSO Provider">
-                    <SelectInput value={ssoProvider} onChange={w(setSsoProvider)}>
+                    <SelectInput value={draft.ssoProvider} onChange={set("ssoProvider")}>
                       <option value="okta">Okta</option>
                       <option value="azure_ad">Microsoft Entra ID</option>
                       <option value="google">Google Workspace</option>
@@ -327,7 +337,7 @@ export default function SettingsPage() {
                 )}
                 <FormRow label="Session Timeout" note="Idle minutes before forced logout">
                   <div className="flex items-center gap-2">
-                    <TextInput value={sessionTimeout} onChange={w(setSessionTimeout)} type="number" />
+                    <TextInput value={draft.sessionTimeout} onChange={set("sessionTimeout")} type="number" />
                     <span className="font-mono text-[11px] text-[var(--muted-foreground)] shrink-0">minutes</span>
                   </div>
                 </FormRow>
@@ -335,11 +345,11 @@ export default function SettingsPage() {
 
               <div className="bg-[var(--card)] border border-[var(--border)] px-5">
                 <FormRow label="IP Allowlist" note="CIDR ranges, comma-separated. Leave blank to allow all.">
-                  <TextInput value={ipAllowlist} onChange={w(setIpAllowlist)} placeholder="10.0.0.0/8, 203.0.113.0/24" />
+                  <TextInput value={draft.ipAllowlist} onChange={set("ipAllowlist")} placeholder="10.0.0.0/8, 203.0.113.0/24" />
                 </FormRow>
                 <FormRow label="Audit Log Retention">
                   <div className="flex items-center gap-2">
-                    <TextInput value={auditLogRetention} onChange={w(setAuditLogRetention)} type="number" />
+                    <TextInput value={draft.auditLogRetention} onChange={set("auditLogRetention")} type="number" />
                     <span className="font-mono text-[11px] text-[var(--muted-foreground)] shrink-0">days</span>
                   </div>
                 </FormRow>
@@ -354,9 +364,9 @@ export default function SettingsPage() {
               <div className="bg-[var(--card)] border border-[var(--border)] px-5 mb-4">
                 <div className="py-3 border-b border-[var(--border)]">
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest mb-3">REST API Access</div>
-                  <Toggle checked={apiEnabled} onChange={w(setApiEnabled)} label="Enable REST API" description="Allow external systems to query reconciliation data and trigger runs." />
+                  <Toggle checked={draft.apiEnabled} onChange={set("apiEnabled")} label="Enable REST API" description="Allow external systems to query reconciliation data and trigger runs." />
                 </div>
-                {apiEnabled && (
+                {draft.apiEnabled && (
                   <>
                     <FormRow label="API Key" note="Read-only. Regenerate to rotate.">
                       <div className="flex items-center gap-2">
@@ -365,7 +375,7 @@ export default function SettingsPage() {
                       </div>
                     </FormRow>
                     <FormRow label="Rate Limit" note="Requests per minute per key">
-                      <TextInput value={rateLimit} onChange={w(setRateLimit)} type="number" />
+                      <TextInput value={draft.rateLimit} onChange={set("rateLimit")} type="number" />
                     </FormRow>
                     <FormRow label="API Base URL" note="Read-only">
                       <TextInput value="https://api.ledgersync.io/v1" readOnly />
@@ -379,11 +389,11 @@ export default function SettingsPage() {
                   <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest">Webhook</div>
                 </div>
                 <FormRow label="Endpoint URL" note="POST events sent on run complete, mismatch, failure">
-                  <TextInput value={webhookUrl} onChange={w(setWebhookUrl)} placeholder="https://your-api.com/webhook" />
+                  <TextInput value={draft.webhookUrl} onChange={set("webhookUrl")} placeholder="https://your-api.com/webhook" />
                 </FormRow>
                 <FormRow label="Signing Secret" note="Used to verify webhook authenticity (HMAC-SHA256)">
                   <div className="flex items-center gap-2">
-                    <TextInput value={webhookSecret} readOnly />
+                    <TextInput value={draft.webhookSecret} readOnly />
                     <button className="font-mono text-[11px] text-[var(--status-warning)] border border-[var(--status-warning)]/30 px-3 py-2 hover:bg-[var(--status-warning)]/10 transition-colors shrink-0">ROTATE</button>
                   </div>
                 </FormRow>

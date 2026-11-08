@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Dialog from "./Dialog";
 import TextInput from "./TextInput";
+import { todayInZone } from "../lib/datetime";
 
 export interface NewRunConfig {
   ledgerFile: string;
@@ -17,7 +18,7 @@ export default function NewRunModal({
 }) {
   const [ledgerFile, setLedgerFile] = useState("");
   const [settlementFile, setSettlementFile] = useState("");
-  const [runDate, setRunDate] = useState(new Date().toISOString().slice(0, 10));
+  const [runDate, setRunDate] = useState(todayInZone());
 
   const canSubmit = ledgerFile.trim() !== "" && settlementFile.trim() !== "" && runDate !== "";
 

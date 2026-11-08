@@ -3,6 +3,7 @@ import FormRow from "../components/FormRow";
 import TextInput from "../components/TextInput";
 import SelectInput from "../components/SelectInput";
 import TextArea from "../components/TextArea";
+import { formatDateTime } from "../lib/datetime";
 
 interface Rule {
   id: string;
@@ -46,9 +47,9 @@ const INITIAL_RULES: Rule[] = [
     id: "RULE-003",
     name: "Bank Fee Deduction — Wire",
     category: "Tolerance",
-    condition: "settlement.amount < ledger.amount AND (ledger.amount - settlement.amount) <= 250 AND tx.type == WIRE",
+    condition: "settlement.amount < ledger.amount AND (ledger.amount - settlement.amount) <= 250000 AND tx.rail == WIRE",
     action: "STATUS = PARTIAL (fee deducted)",
-    tolerance: "USD 250.00",
+    tolerance: "NGN 250,000.00",
     priority: 3,
     enabled: true,
     hitCount: 7,
@@ -94,55 +95,83 @@ const INITIAL_RULES: Rule[] = [
 
 const CATEGORIES = ["All", "Matching", "Tolerance", "Timing", "Trade Finance", "Fraud / Error"];
 
+function emptyDraft(priority: number): Partial<Rule> {
+  return { name: "", category: "Matching", condition: "", action: "", tolerance: "", priority, enabled: true };
+}
+
 export default function RulesPage() {
   const [rules, setRules] = useState<Rule[]>(INITIAL_RULES);
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const [draft, setDraft] = useState<Partial<Rule>>({
-    name: "",
-    category: "Matching",
-    condition: "",
-    action: "",
-    tolerance: "",
-    priority: rules.length + 1,
-    enabled: true,
-  });
+  const [newDraft, setNewDraft] = useState<Partial<Rule>>(emptyDraft(INITIAL_RULES.length + 1));
+  const [editDraft, setEditDraft] = useState<Partial<Rule>>({});
 
-  function setDraftField<K extends keyof Rule>(k: K, v: Rule[K]) {
-    setDraft(d => ({ ...d, [k]: v }));
+  function setNewField<K extends keyof Rule>(k: K, v: Rule[K]) {
+    setNewDraft(d => ({ ...d, [k]: v }));
+    setFormError(null);
+  }
+
+  function setEditField<K extends keyof Rule>(k: K, v: Rule[K]) {
+    setEditDraft(d => ({ ...d, [k]: v }));
+    setFormError(null);
   }
 
   function toggleRule(id: string) {
     setRules(rs => rs.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
   }
 
+  function validate(draft: Partial<Rule>, ignoreId?: string): string | null {
+    if (!draft.name?.trim()) return "Rule name is required.";
+    if (!draft.condition?.trim()) return "Condition expression is required.";
+    if (!draft.action?.trim()) return "Action is required.";
+    const priority = Number(draft.priority);
+    if (!Number.isInteger(priority) || priority < 1) return "Priority must be a whole number of 1 or higher.";
+    const clash = rules.find(r => r.priority === priority && r.id !== ignoreId);
+    if (clash) return `Priority ${priority} is already used by ${clash.name}.`;
+    return null;
+  }
+
   function saveEdit(id: string) {
-    setRules(rs => rs.map(r => r.id === id ? { ...r, ...draft } : r));
+    const error = validate({ ...rules.find(r => r.id === id), ...editDraft }, id);
+    if (error) {
+      setFormError(error);
+      return;
+    }
+    setRules(rs => rs.map(r => r.id === id ? { ...r, ...editDraft } : r));
     setEditingId(null);
+    setEditDraft({});
+    setFormError(null);
     setSaved(id);
     setTimeout(() => setSaved(null), 2000);
   }
 
   function addRule(e: React.FormEvent) {
     e.preventDefault();
+    const error = validate(newDraft);
+    if (error) {
+      setFormError(error);
+      return;
+    }
     const newRule: Rule = {
       id: `RULE-${String(rules.length + 1).padStart(3, "0")}`,
-      name: draft.name || "Unnamed Rule",
-      category: draft.category || "Matching",
-      condition: draft.condition || "",
-      action: draft.action || "",
-      tolerance: draft.tolerance || "0",
-      priority: draft.priority || rules.length + 1,
+      name: newDraft.name!.trim(),
+      category: newDraft.category || "Matching",
+      condition: newDraft.condition!.trim(),
+      action: newDraft.action!.trim(),
+      tolerance: newDraft.tolerance?.trim() || "0",
+      priority: Number(newDraft.priority) || rules.length + 1,
       enabled: true,
       hitCount: 0,
       lastHit: "—",
     };
     setRules(rs => [...rs, newRule]);
     setShowNewForm(false);
-    setDraft({ name: "", category: "Matching", condition: "", action: "", tolerance: "", priority: rules.length + 2, enabled: true });
+    setNewDraft(emptyDraft(rules.length + 2));
+    setFormError(null);
     setSaved(newRule.id);
     setTimeout(() => setSaved(null), 2000);
   }
@@ -150,7 +179,7 @@ export default function RulesPage() {
   const visible = categoryFilter === "All" ? rules : rules.filter(r => r.category === categoryFilter);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden w-full min-h-0">
       {/* sub-nav */}
       <div className="flex items-center justify-between gap-3 px-3 sm:px-5 border-b border-[var(--border)] bg-[var(--card)] h-9 shrink-0">
         <div role="group" aria-label="Filter by category" className="flex items-center gap-0 h-full min-w-0 overflow-x-auto">
@@ -168,7 +197,17 @@ export default function RulesPage() {
           ))}
         </div>
         <button
-          onClick={() => { setShowNewForm(v => !v); setEditingId(null); }}
+          onClick={() => {
+            setShowNewForm(v => {
+              if (!v) {
+                setNewDraft(emptyDraft(rules.length + 1));
+                setFormError(null);
+              }
+              return !v;
+            });
+            setEditingId(null);
+            setEditDraft({});
+          }}
           className="shrink-0 whitespace-nowrap font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1 hover:opacity-90 transition-opacity"
         >
           {showNewForm ? "CANCEL" : "+ NEW RULE"}
@@ -186,10 +225,10 @@ export default function RulesPage() {
               </div>
               <form onSubmit={addRule} className="px-5">
                 <FormRow label="Rule Name">
-                  <TextInput value={draft.name || ""} onChange={v => setDraftField("name", v)} placeholder="Descriptive rule name" />
+                  <TextInput value={newDraft.name || ""} onChange={v => setNewField("name", v)} placeholder="Descriptive rule name" required />
                 </FormRow>
                 <FormRow label="Category">
-                  <SelectInput value={draft.category || "Matching"} onChange={v => setDraftField("category", v)}>
+                  <SelectInput value={newDraft.category || "Matching"} onChange={v => setNewField("category", v)}>
                     {["Matching", "Tolerance", "Timing", "Trade Finance", "Fraud / Error"].map(c => (
                       <option key={c} value={c}>{c}</option>
                     ))}
@@ -197,31 +236,34 @@ export default function RulesPage() {
                 </FormRow>
                 <FormRow label="Condition Expression" note="Uses LedgerSync expression language">
                   <TextArea
-                    value={draft.condition || ""}
-                    onChange={v => setDraftField("condition", v)}
+                    value={newDraft.condition || ""}
+                    onChange={v => setNewField("condition", v)}
                     rows={3}
                     placeholder="e.g. abs(ledger.amount - settlement.amount) / ledger.amount <= 0.01"
                   />
                 </FormRow>
                 <FormRow label="Action">
                   <TextArea
-                    value={draft.action || ""}
-                    onChange={v => setDraftField("action", v)}
+                    value={newDraft.action || ""}
+                    onChange={v => setNewField("action", v)}
                     rows={2}
                     placeholder="e.g. STATUS = PARTIAL; NOTIFY = controller"
                   />
                 </FormRow>
                 <FormRow label="Tolerance">
-                  <TextInput value={draft.tolerance || ""} onChange={v => setDraftField("tolerance", v)} placeholder="e.g. 0.50%, USD 100, 1 day" />
+                  <TextInput value={newDraft.tolerance || ""} onChange={v => setNewField("tolerance", v)} placeholder="e.g. 0.50%, NGN 100,000, 1 day" />
                 </FormRow>
                 <FormRow label="Priority">
-                  <TextInput type="number" value={String(draft.priority || "")} onChange={v => setDraftField("priority", parseInt(v) || 1)} placeholder="Lower = higher priority" />
+                  <TextInput type="number" value={String(newDraft.priority || "")} onChange={v => setNewField("priority", parseInt(v) || 1)} placeholder="Lower = higher priority" />
                 </FormRow>
+                {formError && showNewForm && (
+                  <p className="font-mono text-[11px] text-[var(--status-mismatch)] py-2">{formError}</p>
+                )}
                 <div className="py-4 flex gap-2">
                   <button type="submit" className="font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-4 py-2 uppercase tracking-widest hover:opacity-90 transition-opacity">
                     ADD RULE
                   </button>
-                  <button type="button" onClick={() => setShowNewForm(false)} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-4 py-2 hover:bg-[var(--secondary)] transition-colors">
+                  <button type="button" onClick={() => { setShowNewForm(false); setFormError(null); }} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-4 py-2 hover:bg-[var(--secondary)] transition-colors">
                     CANCEL
                   </button>
                 </div>
@@ -255,17 +297,20 @@ export default function RulesPage() {
                   {editingId === rule.id ? (
                     <div>
                       <FormRow label="Condition">
-                        <TextArea value={draft.condition ?? rule.condition} onChange={v => setDraftField("condition", v)} rows={2} />
+                        <TextArea value={editDraft.condition ?? rule.condition} onChange={v => setEditField("condition", v)} rows={2} />
                       </FormRow>
                       <FormRow label="Action">
-                        <TextArea value={draft.action ?? rule.action} onChange={v => setDraftField("action", v)} rows={2} />
+                        <TextArea value={editDraft.action ?? rule.action} onChange={v => setEditField("action", v)} rows={2} />
                       </FormRow>
                       <FormRow label="Tolerance">
-                        <TextInput value={draft.tolerance ?? rule.tolerance} onChange={v => setDraftField("tolerance", v)} />
+                        <TextInput value={editDraft.tolerance ?? rule.tolerance} onChange={v => setEditField("tolerance", v)} />
                       </FormRow>
+                      {formError && editingId === rule.id && (
+                        <p className="font-mono text-[11px] text-[var(--status-mismatch)] py-2">{formError}</p>
+                      )}
                       <div className="py-3 flex gap-2">
                         <button onClick={() => saveEdit(rule.id)} className="font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1.5 hover:opacity-90 transition-opacity">SAVE</button>
-                        <button onClick={() => setEditingId(null)} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--secondary)] transition-colors">CANCEL</button>
+                        <button onClick={() => { setEditingId(null); setEditDraft({}); setFormError(null); }} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--secondary)] transition-colors">CANCEL</button>
                       </div>
                     </div>
                   ) : (
@@ -290,7 +335,7 @@ export default function RulesPage() {
                       HITS: <span className="text-[var(--foreground)]">{rule.hitCount}</span>
                     </span>
                     <span className="font-mono text-[11px] text-[var(--muted-foreground)]">
-                      LAST: <span className="text-[var(--foreground)]">{rule.lastHit === "—" ? "—" : new Date(rule.lastHit).toLocaleString()}</span>
+                      LAST: <span className="text-[var(--foreground)]">{rule.lastHit === "—" ? "—" : formatDateTime(rule.lastHit)}</span>
                     </span>
                   </div>
                 </div>
@@ -298,9 +343,16 @@ export default function RulesPage() {
                 <div className="flex flex-col gap-1.5 shrink-0">
                   <button
                     onClick={() => {
-                      setDraft({ condition: rule.condition, action: rule.action, tolerance: rule.tolerance });
-                      setEditingId(editingId === rule.id ? null : rule.id);
+                      if (editingId === rule.id) {
+                        setEditingId(null);
+                        setEditDraft({});
+                        setFormError(null);
+                        return;
+                      }
+                      setEditDraft({ condition: rule.condition, action: rule.action, tolerance: rule.tolerance, name: rule.name, priority: rule.priority });
+                      setEditingId(rule.id);
                       setShowNewForm(false);
+                      setFormError(null);
                     }}
                     className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-2.5 py-1 hover:bg-[var(--primary)]/10 transition-colors"
                   >

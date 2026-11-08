@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { RUNS } from "../data/transactions";
+import { type ReconciliationRun } from "../data/transactions";
 import FormRow from "../components/FormRow";
 import TextInput from "../components/TextInput";
 import SelectInput from "../components/SelectInput";
 import Toggle from "../components/Toggle";
+import { formatDateTime } from "../lib/datetime";
+import type { ReportsTab } from "../lib/route";
 
 interface ReportConfig {
   name: string;
@@ -74,15 +76,25 @@ const REPORT_HISTORY = [
   { id: "RPT-20260822-001", name: "Daily EOD NIBSS Reconciliation Summary", generated: "2026-08-22T16:00:33Z", format: "PDF", size: "119 KB", run: "RUN-2026-08-22-002", status: "ready" },
 ];
 
-export default function ReportsPage() {
-  const [tab, setTab] = useState<"generate" | "scheduled" | "history">("generate");
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export default function ReportsPage({
+  tab,
+  onTabChange,
+  runs,
+}: {
+  tab: ReportsTab;
+  onTabChange: (tab: ReportsTab) => void;
+  runs: ReconciliationRun[];
+}) {
   const [submitted, setSubmitted] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [config, setConfig] = useState<ReportConfig>({
     name: "",
     type: "reconciliation_summary",
     dateFrom: "2026-08-24",
     dateTo: "2026-08-24",
-    runIds: [RUNS[0].id],
+    runIds: [runs[0]?.id ?? ""],
     format: "pdf",
     includeSummary: true,
     includeExceptions: true,
@@ -93,22 +105,38 @@ export default function ReportsPage() {
 
   function set<K extends keyof ReportConfig>(k: K, v: ReportConfig[K]) {
     setConfig(c => ({ ...c, [k]: v }));
+    setErrors(e => {
+      if (!e[k as string]) return e;
+      const next = { ...e };
+      delete next[k as string];
+      return next;
+    });
   }
 
   function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
+    const next: Record<string, string> = {};
+    if (!config.name.trim()) next.name = "Report name is required.";
+    if (config.dateFrom && config.dateTo && config.dateFrom > config.dateTo) {
+      next.dateTo = "End date must be on or after the start date.";
+    }
+    if (config.notifyEmail.trim() && !EMAIL_RE.test(config.notifyEmail.trim())) {
+      next.notifyEmail = "Enter a valid email address, or leave this blank.";
+    }
+    setErrors(next);
+    if (Object.keys(next).length > 0) return;
     setSubmitted(true);
     setTimeout(() => setSubmitted(false), 3000);
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden w-full min-h-0">
       {/* sub-nav */}
       <div className="flex items-center gap-0 px-3 sm:px-5 border-b border-[var(--border)] bg-[var(--card)] h-9 shrink-0 overflow-x-auto">
         {(["generate", "scheduled", "history"] as const).map(t => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => onTabChange(t)}
             aria-pressed={tab === t}
             className={`h-full px-4 font-mono text-[11px] tracking-widest whitespace-nowrap border-r border-[var(--border)] transition-colors ${
               tab === t ? "bg-[var(--secondary)] text-[var(--foreground)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -131,13 +159,14 @@ export default function ReportsPage() {
               </p>
             </div>
 
-            <form onSubmit={handleGenerate} className="bg-[var(--card)] border border-[var(--border)]">
+            <form noValidate onSubmit={handleGenerate} className="bg-[var(--card)] border border-[var(--border)]">
               <div className="px-5 py-3 border-b border-[var(--border)] bg-[var(--secondary)]">
                 <span className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest">Report Configuration</span>
               </div>
               <div className="px-4 sm:px-5">
                 <FormRow label="Report Name" required>
-                  <TextInput value={config.name} onChange={v => set("name", v)} placeholder="e.g. August 24 EOD Reconciliation" />
+                  <TextInput value={config.name} onChange={v => set("name", v)} placeholder="e.g. August 24 EOD Reconciliation" required ariaInvalid={!!errors.name} />
+                  {errors.name && <p className="font-mono text-[11px] text-[var(--status-mismatch)] mt-1">{errors.name}</p>}
                 </FormRow>
                 <FormRow label="Report Type" required>
                   <SelectInput value={config.type} onChange={v => set("type", v)}>
@@ -152,12 +181,13 @@ export default function ReportsPage() {
                   <div className="flex items-center gap-2">
                     <TextInput id="report-date-from" type="date" value={config.dateFrom} onChange={v => set("dateFrom", v)} />
                     <span className="font-mono text-[11px] text-[var(--muted-foreground)] shrink-0">to</span>
-                    <TextInput id="report-date-to" ariaLabel="End date" type="date" value={config.dateTo} onChange={v => set("dateTo", v)} />
+                    <TextInput id="report-date-to" ariaLabel="End date" type="date" value={config.dateTo} onChange={v => set("dateTo", v)} ariaInvalid={!!errors.dateTo} />
                   </div>
+                  {errors.dateTo && <p className="font-mono text-[11px] text-[var(--status-mismatch)] mt-1">{errors.dateTo}</p>}
                 </FormRow>
                 <FormRow label="Source Run">
                   <SelectInput value={config.runIds[0]} onChange={v => set("runIds", [v])}>
-                    {RUNS.map(r => (
+                    {runs.map(r => (
                       <option key={r.id} value={r.id}>{r.id} — {r.ledgerFile}</option>
                     ))}
                   </SelectInput>
@@ -207,8 +237,10 @@ export default function ReportsPage() {
                   </div>
                 </FormRow>
                 <FormRow label="Notify Email">
-                  <TextInput value={config.notifyEmail} onChange={v => set("notifyEmail", v)} placeholder="controller@company.com" type="email" />
-                  <div className="font-mono text-[11px] text-[var(--muted-foreground)] mt-1">Report link sent on completion. Leave blank to skip.</div>
+                  <TextInput value={config.notifyEmail} onChange={v => set("notifyEmail", v)} placeholder="controller@company.com" type="email" ariaInvalid={!!errors.notifyEmail} />
+                  {errors.notifyEmail
+                    ? <p className="font-mono text-[11px] text-[var(--status-mismatch)] mt-1">{errors.notifyEmail}</p>
+                    : <div className="font-mono text-[11px] text-[var(--muted-foreground)] mt-1">Report link sent on completion. Leave blank to skip.</div>}
                 </FormRow>
               </div>
 
@@ -263,8 +295,8 @@ export default function ReportsPage() {
                           ["Format", s.format],
                           ["Frequency", s.frequency],
                           ["Recipients", s.recipients],
-                          ["Last Run", new Date(s.lastRun).toLocaleString()],
-                          ["Next Run", new Date(s.nextRun).toLocaleString()],
+                          ["Last Run", formatDateTime(s.lastRun)],
+                          ["Next Run", formatDateTime(s.nextRun)],
                         ].map(([k, v]) => (
                           <div key={k} className="flex gap-2">
                             <span className="font-mono text-[11px] text-[var(--muted-foreground)] w-20 shrink-0">{k}</span>
@@ -308,7 +340,7 @@ export default function ReportsPage() {
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--primary)]">{r.id}</td>
                     <td className="px-3 py-2.5 text-xs text-[var(--foreground)] max-w-[200px] truncate">{r.name}</td>
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--muted-foreground)]">
-                      {new Date(r.generated).toLocaleString()}
+                      {formatDateTime(r.generated)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--muted-foreground)]">{r.run}</td>
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--foreground)]">{r.format}</td>

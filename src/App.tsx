@@ -1,9 +1,11 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  TRANSACTIONS,
-  RUNS,
+  TRANSACTIONS as SEED_TRANSACTIONS,
+  RUNS as SEED_RUNS,
   formatCurrency,
   formatDelta,
+  summarizeTransactions,
+  transactionsForRun,
   type Transaction,
   type TxStatus,
   type ReconciliationRun,
@@ -11,8 +13,10 @@ import {
 import ReportsPage from "./pages/ReportsPage";
 import RulesPage from "./pages/RulesPage";
 import SettingsPage from "./pages/SettingsPage";
-import NewRunModal from "./components/NewRunModal";
+import NewRunModal, { type NewRunConfig } from "./components/NewRunModal";
 import Dialog from "./components/Dialog";
+import { formatRunStamp } from "./lib/datetime";
+import { useHashRoute, type Page } from "./lib/route";
 
 // ─── Status badge ────────────────────────────────────────────────────────────
 
@@ -71,8 +75,7 @@ function RunCard({
   active: boolean;
   onClick: () => void;
 }) {
-  const matchRate = (run.matched / run.totalRecords) * 100;
-  const ts = new Date(run.timestamp);
+  const matchRate = run.totalRecords === 0 ? 0 : (run.matched / run.totalRecords) * 100;
   return (
     <button
       onClick={onClick}
@@ -83,13 +86,12 @@ function RunCard({
     >
       <div className="flex items-center justify-between mb-0.5">
         <span className="font-mono text-[11px] text-[var(--primary)]">{run.id}</span>
-        <span className={`font-mono text-[11px] font-bold ${matchRateColor(matchRate)}`}>{matchRate.toFixed(1)}%</span>
+        <span className={`font-mono text-[11px] font-bold ${matchRateColor(matchRate)}`}>
+          {run.status === "running" ? "…" : `${matchRate.toFixed(1)}%`}
+        </span>
       </div>
       <div className="text-[11px] text-[var(--muted-foreground)] truncate">{run.ledgerFile}</div>
-      <div className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
-        {ts.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} ·{" "}
-        {ts.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-      </div>
+      <div className="text-[11px] text-[var(--muted-foreground)] mt-0.5">{formatRunStamp(run.timestamp)}</div>
     </button>
   );
 }
@@ -303,7 +305,14 @@ function AuditModal({
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
-type NavTab = "RECONCILIATION" | "REPORTS" | "RULES" | "SETTINGS";
+const PAGE_SIZE = 50;
+
+const NAV: { page: Page; label: string }[] = [
+  { page: "reconciliation", label: "RECONCILIATION" },
+  { page: "reports", label: "REPORTS" },
+  { page: "rules", label: "RULES" },
+  { page: "settings", label: "SETTINGS" },
+];
 
 const ALL_FILTERS: { key: TxStatus | "all"; label: string }[] = [
   { key: "all", label: "ALL" },
@@ -327,31 +336,41 @@ const COLUMNS: { label: string; field: keyof Transaction; className: string; ali
 ];
 
 export default function App() {
-  const [navTab, setNavTab] = useState<NavTab>("RECONCILIATION");
-  const [activeRun, setActiveRun] = useState<ReconciliationRun>(RUNS[0]);
+  const [runs, setRuns] = useState<ReconciliationRun[]>(SEED_RUNS);
+  const [allTransactions] = useState<Transaction[]>(SEED_TRANSACTIONS);
+  const { route, navigate } = useHashRoute(SEED_RUNS[0].id);
   const [showNewRunModal, setShowNewRunModal] = useState(false);
   const [filter, setFilter] = useState<TxStatus | "all">("all");
   const [search, setSearch] = useState("");
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [showAudit, setShowAudit] = useState(false);
-  const [sortField, setSortField] = useState<keyof Transaction>("id");
+  const [sortField, setSortField] = useState<keyof Transaction>("status");
   const [sortAsc, setSortAsc] = useState(true);
+  const [page, setPage] = useState(1);
+
+  const activeRun = runs.find((r) => r.id === route.runId) ?? runs[0];
+  const runTxs = useMemo(() => transactionsForRun(activeRun.id, allTransactions), [activeRun.id, allTransactions]);
+
+  useEffect(() => {
+    setPage(1);
+    setSelectedTx(null);
+  }, [activeRun.id, filter, search]);
 
   const statusCounts = useMemo(() => {
     const counts: Record<TxStatus | "all", number> = {
-      all: TRANSACTIONS.length,
+      all: runTxs.length,
       matched: 0,
       mismatch: 0,
       missing_settlement: 0,
       missing_ledger: 0,
       partial: 0,
     };
-    for (const t of TRANSACTIONS) counts[t.status]++;
+    for (const t of runTxs) counts[t.status]++;
     return counts;
-  }, []);
+  }, [runTxs]);
 
   const filtered = useMemo(() => {
-    let rows = TRANSACTIONS;
+    let rows = runTxs;
     if (filter !== "all") rows = rows.filter((t) => t.status === filter);
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -376,19 +395,46 @@ export default function App() {
       const cmp = av < bv ? -1 : av > bv ? 1 : 0;
       return sortAsc ? cmp : -cmp;
     });
-  }, [filter, search, sortField, sortAsc]);
+  }, [runTxs, filter, search, sortField, sortAsc]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   function toggleSort(field: keyof Transaction) {
     if (sortField === field) setSortAsc(!sortAsc);
     else {
       setSortField(field);
-      setSortAsc(true);
+      setSortAsc(field === "status" || field === "date" ? true : false);
     }
+    setPage(1);
   }
 
-  const matchRate = (activeRun.matched / activeRun.totalRecords) * 100;
+  function selectRun(run: ReconciliationRun) {
+    navigate({ page: "reconciliation", runId: run.id }, "replace");
+  }
+
+  function handleNewRun(config: NewRunConfig) {
+    const seq = String(runs.length + 1).padStart(3, "0");
+    const id = `RUN-${config.runDate.replace(/-/g, "")}-${seq}`;
+    const next: ReconciliationRun = {
+      id,
+      timestamp: new Date().toISOString(),
+      ledgerFile: config.ledgerFile,
+      settlementFile: config.settlementFile,
+      status: "running",
+      ...summarizeTransactions([]),
+    };
+    setRuns((rs) => [next, ...rs]);
+    navigate({ page: "reconciliation", runId: id }, "push");
+    setShowNewRunModal(false);
+  }
+
+  const matchRate = activeRun.totalRecords === 0 ? 0 : (activeRun.matched / activeRun.totalRecords) * 100;
   const issueCount =
     activeRun.mismatched + activeRun.missingSettlement + activeRun.missingLedger + activeRun.partial;
+  const from = filtered.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const to = Math.min(currentPage * PAGE_SIZE, filtered.length);
 
   return (
     <div className="flex flex-col h-full bg-[var(--background)] text-[var(--foreground)]">
@@ -407,38 +453,51 @@ export default function App() {
         </div>
 
         <nav aria-label="Main" className="flex items-center h-full min-w-0 overflow-x-auto">
-          {(["RECONCILIATION", "REPORTS", "RULES", "SETTINGS"] as NavTab[]).map((item) => (
+          {NAV.map(({ page, label }) => (
             <button
-              key={item}
-              onClick={() => setNavTab(item)}
-              aria-current={navTab === item ? "page" : undefined}
+              key={page}
+              onClick={() => navigate({ page })}
+              aria-current={route.page === page ? "page" : undefined}
               className={`h-full px-3 sm:px-4 font-mono text-[11px] tracking-widest border-b-2 whitespace-nowrap transition-colors ${
-                navTab === item
+                route.page === page
                   ? "border-[var(--primary)] text-[var(--foreground)]"
                   : "border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
               }`}
             >
-              {item}
+              {label}
             </button>
           ))}
         </nav>
 
         <div className="ml-auto hidden lg:flex items-center gap-3 shrink-0">
           <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--status-match)] animate-pulse" aria-hidden="true" />
-            <span className="font-mono text-[11px] text-[var(--muted-foreground)]">LIVE SYNC</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--status-warning)]" aria-hidden="true" />
+            <span className="font-mono text-[11px] text-[var(--muted-foreground)]">SAMPLE DATA</span>
           </div>
           <div className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-2 py-0.5">
-            MERIDIAN-NG · PROD
+            MERIDIAN-NG · DEMO
           </div>
         </div>
       </header>
 
-      {navTab === "REPORTS" && <ReportsPage />}
-      {navTab === "RULES" && <RulesPage />}
-      {navTab === "SETTINGS" && <SettingsPage />}
+      <div className={route.page === "reports" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "reports" ? true : undefined}>
+        <ReportsPage
+          tab={route.reportsTab}
+          onTabChange={(tab) => navigate({ page: "reports", reportsTab: tab })}
+          runs={runs}
+        />
+      </div>
+      <div className={route.page === "rules" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "rules" ? true : undefined}>
+        <RulesPage />
+      </div>
+      <div className={route.page === "settings" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "settings" ? true : undefined}>
+        <SettingsPage
+          tab={route.settingsTab}
+          onTabChange={(tab) => navigate({ page: "settings", settingsTab: tab })}
+        />
+      </div>
 
-      {navTab === "RECONCILIATION" && (
+      <div className={route.page === "reconciliation" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "reconciliation" ? true : undefined}>
         <div className="flex flex-1 overflow-hidden">
           {/* ── Sidebar ── */}
           <aside
@@ -447,8 +506,8 @@ export default function App() {
           >
             <div className="px-3 py-2 border-b border-[var(--border)]">
               <h2 className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">Run History</h2>
-              {RUNS.map((r) => (
-                <RunCard key={r.id} run={r} active={r.id === activeRun.id} onClick={() => setActiveRun(r)} />
+              {runs.map((r) => (
+                <RunCard key={r.id} run={r} active={r.id === activeRun.id} onClick={() => selectRun(r)} />
               ))}
             </div>
 
@@ -472,12 +531,12 @@ export default function App() {
                   <select
                     id="run-picker"
                     value={activeRun.id}
-                    onChange={(e) => setActiveRun(RUNS.find((r) => r.id === e.target.value) ?? RUNS[0])}
+                    onChange={(e) => selectRun(runs.find((r) => r.id === e.target.value) ?? runs[0])}
                     className="w-full appearance-none bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] font-mono text-xs px-3 py-2 pr-8 outline-none focus:border-[var(--primary)]"
                   >
-                    {RUNS.map((r) => (
+                    {runs.map((r) => (
                       <option key={r.id} value={r.id}>
-                        {r.id} · {((r.matched / r.totalRecords) * 100).toFixed(1)}%
+                        {r.id} · {r.totalRecords === 0 ? "…" : `${((r.matched / r.totalRecords) * 100).toFixed(1)}%`}
                       </option>
                     ))}
                   </select>
@@ -598,7 +657,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((tx) => (
+                  {paged.map((tx) => (
                     <tr
                       key={tx.id}
                       tabIndex={0}
@@ -649,30 +708,58 @@ export default function App() {
             {/* ── Footer ── */}
             <div className="px-3 sm:px-5 py-2 border-t border-[var(--border)] bg-[var(--card)] shrink-0 flex items-center justify-between gap-4">
               <span className="font-mono text-[11px] text-[var(--muted-foreground)] whitespace-nowrap" aria-live="polite">
-                {filtered.length} of {TRANSACTIONS.length} records
+                {filtered.length === 0
+                  ? `0 of ${runTxs.length} records`
+                  : `${from}–${to} of ${filtered.length} records`}
+                {filter !== "all" || search ? ` · ${runTxs.length} in run` : ""}
               </span>
-              <div className="hidden sm:flex items-center gap-4">
-                {[
-                  { color: "var(--status-match)", label: "Matched" },
-                  { color: "var(--status-mismatch)", label: "Mismatch" },
-                  { color: "var(--status-warning)", label: "Missing" },
-                  { color: "var(--status-partial)", label: "Partial" },
-                ].map(({ color, label }) => (
-                  <span key={label} className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--muted-foreground)]">
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} aria-hidden="true" />
-                    {label}
-                  </span>
-                ))}
+              <div className="flex items-center gap-3">
+                <div className="hidden sm:flex items-center gap-4">
+                  {[
+                    { color: "var(--status-match)", label: "Matched" },
+                    { color: "var(--status-mismatch)", label: "Mismatch" },
+                    { color: "var(--status-warning)", label: "Missing" },
+                    { color: "var(--status-partial)", label: "Partial" },
+                  ].map(({ color, label }) => (
+                    <span key={label} className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--muted-foreground)]">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} aria-hidden="true" />
+                      {label}
+                    </span>
+                  ))}
+                </div>
+                {pageCount > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={currentPage <= 1}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      className="font-mono text-[11px] px-2 py-1 border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      PREV
+                    </button>
+                    <span className="font-mono text-[11px] text-[var(--muted-foreground)] px-2">
+                      {currentPage}/{pageCount}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={currentPage >= pageCount}
+                      onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                      className="font-mono text-[11px] px-2 py-1 border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      NEXT
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </main>
         </div>
-      )}
+      </div>
 
       {selectedTx && <DetailDrawer tx={selectedTx} onClose={() => setSelectedTx(null)} />}
-      {showAudit && <AuditModal run={activeRun} transactions={TRANSACTIONS} onClose={() => setShowAudit(false)} />}
+      {showAudit && <AuditModal run={activeRun} transactions={runTxs} onClose={() => setShowAudit(false)} />}
       {showNewRunModal && (
-        <NewRunModal onClose={() => setShowNewRunModal(false)} onSubmit={() => setShowNewRunModal(false)} />
+        <NewRunModal onClose={() => setShowNewRunModal(false)} onSubmit={handleNewRun} />
       )}
     </div>
   );
