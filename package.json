@@ -1,10 +1,10 @@
 {
-  "name": "figma-make-app",
+  "name": "ledgersync",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "format": "oxfmt"

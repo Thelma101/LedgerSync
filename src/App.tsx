@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  TRANSACTIONS as SEED_TRANSACTIONS,
   RUNS as SEED_RUNS,
   formatCurrency,
   formatDelta,
@@ -16,7 +15,9 @@ import SettingsPage from "./pages/SettingsPage";
 import NewRunModal, { type NewRunConfig } from "./components/NewRunModal";
 import Dialog from "./components/Dialog";
 import { formatRunStamp } from "./lib/datetime";
+import { bumpRuleHits, parseDelimited, policyFromRules, reconcileFiles } from "./lib/reconcile";
 import { useHashRoute, type Page } from "./lib/route";
+import { useWorkspace, type AuditAction, type AuditEvent } from "./lib/workspace";
 
 // ─── Status badge ────────────────────────────────────────────────────────────
 
@@ -122,12 +123,22 @@ function StatTile({
 
 // ─── Detail drawer ────────────────────────────────────────────────────────────
 
+const ACTION_NOTE: Record<AuditAction, (id: string) => string> = {
+  reviewed: (id) => `Marked ${id} as reviewed.`,
+  escalated: (id) => `Escalated ${id} to controller.`,
+  flagged: (id) => `Flagged ${id} for audit.`,
+};
+
 function DetailDrawer({
   tx,
+  events,
   onClose,
+  onAction,
 }: {
   tx: Transaction;
+  events: AuditEvent[];
   onClose: () => void;
+  onAction: (action: AuditAction) => void;
 }) {
   return (
     <Dialog onClose={onClose} labelledBy="tx-detail-title" variant="drawer">
@@ -179,13 +190,36 @@ function DetailDrawer({
         )}
 
         <div className="pt-2 space-y-2">
-          <button className="w-full font-mono text-xs bg-[var(--secondary)] hover:bg-[var(--border)] text-[var(--foreground)] border border-[var(--border)] py-2 px-4 transition-colors text-left">
+          {events.length > 0 && (
+            <div className="border border-[var(--border)] px-3 py-2 space-y-1.5">
+              <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">Exception trail</div>
+              {events.map((event) => (
+                <div key={event.id} className="font-mono text-[11px] text-[var(--foreground)]">
+                  {event.note}
+                  <span className="text-[var(--muted-foreground)]"> · {formatRunStamp(event.at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => onAction("reviewed")}
+            className="w-full font-mono text-xs bg-[var(--secondary)] hover:bg-[var(--border)] text-[var(--foreground)] border border-[var(--border)] py-2 px-4 transition-colors text-left"
+          >
             MARK AS REVIEWED
           </button>
-          <button className="w-full font-mono text-xs bg-[var(--secondary)] hover:bg-[var(--border)] text-[var(--foreground)] border border-[var(--border)] py-2 px-4 transition-colors text-left">
+          <button
+            type="button"
+            onClick={() => onAction("escalated")}
+            className="w-full font-mono text-xs bg-[var(--secondary)] hover:bg-[var(--border)] text-[var(--foreground)] border border-[var(--border)] py-2 px-4 transition-colors text-left"
+          >
             ESCALATE TO CONTROLLER
           </button>
-          <button className="w-full font-mono text-xs text-[var(--status-mismatch)] hover:bg-[var(--border)] border border-[var(--status-mismatch)]/30 py-2 px-4 transition-colors text-left">
+          <button
+            type="button"
+            onClick={() => onAction("flagged")}
+            className="w-full font-mono text-xs text-[var(--status-mismatch)] hover:bg-[var(--border)] border border-[var(--status-mismatch)]/30 py-2 px-4 transition-colors text-left"
+          >
             FLAG FOR AUDIT
           </button>
         </div>
@@ -336,9 +370,9 @@ const COLUMNS: { label: string; field: keyof Transaction; className: string; ali
 ];
 
 export default function App() {
-  const [runs, setRuns] = useState<ReconciliationRun[]>(SEED_RUNS);
-  const [allTransactions] = useState<Transaction[]>(SEED_TRANSACTIONS);
-  const { route, navigate } = useHashRoute(SEED_RUNS[0].id);
+  const { workspace, setRuns, setTransactions, setRules, setAudit } = useWorkspace();
+  const { runs, transactions: allTransactions, rules, settings, audit } = workspace;
+  const { route, navigate } = useHashRoute(runs[0]?.id ?? SEED_RUNS[0].id);
   const [showNewRunModal, setShowNewRunModal] = useState(false);
   const [filter, setFilter] = useState<TxStatus | "all">("all");
   const [search, setSearch] = useState("");
@@ -348,7 +382,7 @@ export default function App() {
   const [sortAsc, setSortAsc] = useState(true);
   const [page, setPage] = useState(1);
 
-  const activeRun = runs.find((r) => r.id === route.runId) ?? runs[0];
+  const activeRun = runs.find((r) => r.id === route.runId) ?? runs[0] ?? SEED_RUNS[0];
   const runTxs = useMemo(() => transactionsForRun(activeRun.id, allTransactions), [activeRun.id, allTransactions]);
 
   useEffect(() => {
@@ -414,21 +448,52 @@ export default function App() {
     navigate({ page: "reconciliation", runId: run.id }, "replace");
   }
 
-  function handleNewRun(config: NewRunConfig) {
+  async function handleNewRun(config: NewRunConfig) {
+    const [ledgerText, settlementText] = await Promise.all([config.ledgerFile.text(), config.settlementFile.text()]);
+    const ledger = parseDelimited(ledgerText);
+    const settlement = parseDelimited(settlementText);
+    if (ledger.length === 0 && settlement.length === 0) {
+      throw new Error("Neither file had readable rows. Use CSV with headers: date, description, amount, currency, reference, counterparty.");
+    }
     const seq = String(runs.length + 1).padStart(3, "0");
     const id = `RUN-${config.runDate.replace(/-/g, "")}-${seq}`;
+    const policy = policyFromRules(rules, settings.breakThreshold);
+    const flagDuplicates = rules.some((r) => r.enabled && /duplicate/i.test(`${r.name} ${r.action}`));
+    const txs = reconcileFiles(id, config.runDate, ledger, settlement, policy, { flagDuplicates });
     const next: ReconciliationRun = {
       id,
       timestamp: new Date().toISOString(),
-      ledgerFile: config.ledgerFile,
-      settlementFile: config.settlementFile,
-      status: "running",
-      ...summarizeTransactions([]),
+      ledgerFile: config.ledgerFile.name,
+      settlementFile: config.settlementFile.name,
+      status: "complete",
+      ...summarizeTransactions(txs),
     };
+    setTransactions((prev) => [...prev, ...txs]);
     setRuns((rs) => [next, ...rs]);
+    setRules((prev) => bumpRuleHits(prev, txs));
     navigate({ page: "reconciliation", runId: id }, "push");
     setShowNewRunModal(false);
   }
+
+  function logAction(tx: Transaction, action: AuditAction) {
+    const event: AuditEvent = {
+      id: `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      txId: tx.id,
+      runId: tx.runId,
+      action,
+      at: new Date().toISOString(),
+      note: ACTION_NOTE[action](tx.id),
+    };
+    setAudit((prev) => [event, ...prev]);
+  }
+
+  const latestAction = useMemo(() => {
+    const map = new Map<string, AuditAction>();
+    for (const event of audit) {
+      if (!map.has(event.txId)) map.set(event.txId, event.action);
+    }
+    return map;
+  }, [audit]);
 
   const matchRate = activeRun.totalRecords === 0 ? 0 : (activeRun.matched / activeRun.totalRecords) * 100;
   const issueCount =
@@ -480,24 +545,25 @@ export default function App() {
         </div>
       </header>
 
-      <div className={route.page === "reports" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "reports" ? true : undefined}>
+      <div className={route.page === "reports" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"}>
         <ReportsPage
           tab={route.reportsTab}
           onTabChange={(tab) => navigate({ page: "reports", reportsTab: tab })}
           runs={runs}
+          transactions={allTransactions}
         />
       </div>
-      <div className={route.page === "rules" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "rules" ? true : undefined}>
+      <div className={route.page === "rules" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"}>
         <RulesPage />
       </div>
-      <div className={route.page === "settings" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "settings" ? true : undefined}>
+      <div className={route.page === "settings" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"}>
         <SettingsPage
           tab={route.settingsTab}
           onTabChange={(tab) => navigate({ page: "settings", settingsTab: tab })}
         />
       </div>
 
-      <div className={route.page === "reconciliation" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"} inert={route.page !== "reconciliation" ? true : undefined}>
+      <div className={route.page === "reconciliation" ? "flex flex-1 min-h-0 overflow-hidden" : "hidden"}>
         <div className="flex flex-1 overflow-hidden">
           {/* ── Sidebar ── */}
           <aside
@@ -661,7 +727,7 @@ export default function App() {
                     <tr
                       key={tx.id}
                       tabIndex={0}
-                      aria-label={`${tx.id}, ${tx.description}, ${STATUS_CONFIG[tx.status].label}`}
+                      aria-label={`${tx.id}, ${tx.description}, ${STATUS_CONFIG[tx.status].label}${tx.notes?.includes("Duplicate reference") ? ", duplicate reference" : ""}${latestAction.get(tx.id) ? `, ${latestAction.get(tx.id)}` : ""}`}
                       className="border-b border-[var(--border)] cursor-pointer transition-colors"
                       onClick={() => setSelectedTx(tx)}
                       onKeyDown={(e) => {
@@ -690,7 +756,19 @@ export default function App() {
                         <DeltaCell delta={tx.delta} status={tx.status} />
                       </td>
                       <td className="px-3 py-2">
-                        <StatusBadge status={tx.status} />
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <StatusBadge status={tx.status} />
+                          {tx.notes?.includes("Duplicate reference") && (
+                            <span className="font-mono text-[10px] tracking-widest text-[var(--status-warning)] border border-[var(--status-warning)]/30 px-1 py-0.5">
+                              DUP
+                            </span>
+                          )}
+                          {latestAction.get(tx.id) && (
+                            <span className="font-mono text-[10px] tracking-widest text-[var(--muted-foreground)] border border-[var(--border)] px-1 py-0.5 uppercase">
+                              {latestAction.get(tx.id)}
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -756,7 +834,15 @@ export default function App() {
         </div>
       </div>
 
-      {selectedTx && <DetailDrawer tx={selectedTx} onClose={() => setSelectedTx(null)} />}
+      {selectedTx && (
+        <DetailDrawer
+          key={selectedTx.id}
+          tx={selectedTx}
+          events={audit.filter((e) => e.txId === selectedTx.id)}
+          onClose={() => setSelectedTx(null)}
+          onAction={(action) => logAction(selectedTx, action)}
+        />
+      )}
       {showAudit && <AuditModal run={activeRun} transactions={runTxs} onClose={() => setShowAudit(false)} />}
       {showNewRunModal && (
         <NewRunModal onClose={() => setShowNewRunModal(false)} onSubmit={handleNewRun} />

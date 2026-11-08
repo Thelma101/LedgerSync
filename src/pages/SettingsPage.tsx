@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import FormRow from "../components/FormRow";
 import TextInput from "../components/TextInput";
 import SelectInput from "../components/SelectInput";
 import Toggle from "../components/Toggle";
+import Flash from "../components/Flash";
 import { SETTINGS_TABS, type SettingsTab } from "../lib/route";
+import { DEFAULT_SETTINGS, type Settings } from "../data/settings";
+import { parseWorkspaceFile, useWorkspace } from "../lib/workspace";
 
 function SectionHeader({ title, description }: { title: string; description: string }) {
   return (
@@ -35,45 +38,6 @@ function SaveBar({ dirty, onSave, onDiscard, saved }: {
   );
 }
 
-const DEFAULT_SETTINGS = {
-  orgName: "Meridian Capital & Trust Nigeria Ltd",
-  timezone: "Africa/Lagos",
-  currency: "NGN",
-  fiscalYearEnd: "12-31",
-  retentionDays: "90",
-  autoRun: true,
-  autoRunTime: "17:00",
-  breakThreshold: "100",
-  ledgerType: "sftp",
-  ledgerHost: "sftp.meridian-ledger.ng",
-  ledgerPath: "/exports/ledger/daily/*.csv",
-  ledgerUser: "recon_svc",
-  stlmtType: "nibss",
-  swiftBic: "MRDNNGLA",
-  swiftQueue: "NIBSS_NIP_INBOUND",
-  dateFormat: "YYYY-MM-DD",
-  notifyOnComplete: true,
-  notifyOnMismatch: true,
-  notifyOnMissing: true,
-  notifyOnFailure: true,
-  mismatchThreshold: "5",
-  slackWebhook: "https://hooks.slack.com/services/T00000/B00000/XXXXXXX",
-  emailRecipients: "controller@meridian.ng, cfo@meridian.ng",
-  pagerdutyKey: "",
-  mfaRequired: true,
-  ssoEnabled: true,
-  ssoProvider: "okta",
-  sessionTimeout: "480",
-  ipAllowlist: "10.0.0.0/8, 172.16.0.0/12",
-  auditLogRetention: "365",
-  apiEnabled: true,
-  rateLimit: "1000",
-  webhookUrl: "https://api.meridian.ng/ledgersync/webhook",
-  webhookSecret: "wh_sec_••••••••••••••••",
-};
-
-type Settings = typeof DEFAULT_SETTINGS;
-
 export default function SettingsPage({
   tab,
   onTabChange,
@@ -81,10 +45,56 @@ export default function SettingsPage({
   tab: SettingsTab;
   onTabChange: (tab: SettingsTab) => void;
 }) {
-  const [committed, setCommitted] = useState<Settings>(DEFAULT_SETTINGS);
-  const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
+  const { workspace, setSettings, replaceWorkspace, resetDemo } = useWorkspace();
+  const importRef = useRef<HTMLInputElement>(null);
+  const [committed, setCommitted] = useState<Settings>(workspace.settings);
+  const [draft, setDraft] = useState<Settings>(workspace.settings);
   const [saved, setSaved] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [keyFileName, setKeyFileName] = useState("ed25519_recon.pub");
+  const [apiKey, setApiKey] = useState("lsk_live_••••••••••••••••••••••••••••••••");
+  const [webhookSecret, setWebhookSecret] = useState(DEFAULT_SETTINGS.webhookSecret);
+  const [testing, setTesting] = useState<"ledger" | "settlement" | "webhook" | null>(null);
+  const keyInputRef = useRef<HTMLInputElement>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(committed);
+
+  function flashMsg(message: string) {
+    setFlash(message);
+    window.setTimeout(() => setFlash(null), 3200);
+  }
+
+  function testConnection(kind: "ledger" | "settlement") {
+    setTesting(kind);
+    window.setTimeout(() => {
+      setTesting(null);
+      if (kind === "ledger") {
+        flashMsg(`Demo only — no live SFTP. Host ${draft.ledgerHost} and path ${draft.ledgerPath} look valid.`);
+      } else {
+        flashMsg(`Demo only — no live ${draft.stlmtType.toUpperCase()} hop. Queue ${draft.swiftQueue} is recorded locally.`);
+      }
+    }, 700);
+  }
+
+  function rotateApiKey() {
+    const token = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+    setApiKey(`lsk_demo_${token}`);
+    flashMsg("API key rotated in this browser session. Copy it now — a live backend is not connected.");
+  }
+
+  function rotateWebhookSecret() {
+    const token = Math.random().toString(36).slice(2, 18);
+    setWebhookSecret(`wh_sec_${token}`);
+    setDraft((d) => ({ ...d, webhookSecret: `wh_sec_${token}` }));
+    flashMsg("Webhook signing secret rotated in this browser session.");
+  }
+
+  function sendTestPayload() {
+    setTesting("webhook");
+    window.setTimeout(() => {
+      setTesting(null);
+      flashMsg(`Would POST a sample run.complete event to ${draft.webhookUrl}. This demo does not send network requests.`);
+    }, 600);
+  }
 
   function set<K extends keyof Settings>(k: K) {
     return (v: Settings[K]) => {
@@ -93,8 +103,14 @@ export default function SettingsPage({
     };
   }
 
+  useEffect(() => {
+    setCommitted(workspace.settings);
+    setDraft(workspace.settings);
+  }, [workspace.settings]);
+
   function save() {
     setCommitted(draft);
+    setSettings(draft);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   }
@@ -106,6 +122,7 @@ export default function SettingsPage({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden w-full min-h-0">
+      <Flash message={flash} />
       {/* sub-nav */}
       <div className="flex items-center gap-0 px-3 sm:px-5 border-b border-[var(--border)] bg-[var(--card)] h-9 shrink-0 overflow-x-auto">
         {SETTINGS_TABS.map(t => (
@@ -180,6 +197,66 @@ export default function SettingsPage({
                   </div>
                 </FormRow>
               </div>
+
+              <div className="mt-4 bg-[var(--card)] border border-[var(--border)] px-5 py-4">
+                <div className="font-mono text-[11px] text-[var(--muted-foreground)] uppercase tracking-widest mb-2">This browser</div>
+                <p className="font-mono text-[11px] text-[var(--foreground)] leading-relaxed mb-3">
+                  Runs, rules, settings, and exception actions are stored here until a server database is connected.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const blob = new Blob([JSON.stringify(workspace, null, 2)], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `ledgersync-workspace-${new Date().toISOString().slice(0, 10)}.json`;
+                      a.click();
+                      setTimeout(() => URL.revokeObjectURL(url), 0);
+                      flashMsg("Downloaded workspace JSON from this browser.");
+                    }}
+                    className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors"
+                  >
+                    EXPORT WORKSPACE
+                  </button>
+                  <input
+                    ref={importRef}
+                    type="file"
+                    accept="application/json,.json"
+                    className="sr-only"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!file) return;
+                      const next = parseWorkspaceFile(await file.text());
+                      if (!next) {
+                        flashMsg("That file is not a LedgerSync workspace.");
+                        return;
+                      }
+                      replaceWorkspace(next);
+                      flashMsg(`Imported ${next.runs.length} runs from ${file.name}.`);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => importRef.current?.click()}
+                    className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors"
+                  >
+                    IMPORT WORKSPACE
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetDemo();
+                      flashMsg("Restored the sample runs, rules, and settings.");
+                    }}
+                    className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-2 hover:bg-[var(--secondary)] transition-colors"
+                  >
+                    RESTORE SAMPLE DATA
+                  </button>
+                </div>
+              </div>
             </>
           )}
 
@@ -212,10 +289,28 @@ export default function SettingsPage({
                       <TextInput value={draft.ledgerUser} onChange={set("ledgerUser")} />
                     </FormRow>
                     <FormRow label="Private Key" note="PEM-encoded RSA or Ed25519 key">
-                      <button className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors">
+                      <input
+                        ref={keyInputRef}
+                        type="file"
+                        accept=".pem,.pub,.key,.txt"
+                        className="sr-only"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          setKeyFileName(file.name);
+                          flashMsg(`Key file ${file.name} stored in this browser session only.`);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => keyInputRef.current?.click()}
+                        className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors"
+                      >
                         UPLOAD KEY FILE
                       </button>
-                      <span className="font-mono text-[11px] text-[var(--status-match)] ml-3">✓ ed25519_recon.pub uploaded</span>
+                      {keyFileName && (
+                        <span className="font-mono text-[11px] text-[var(--status-match)] ml-3">✓ {keyFileName}</span>
+                      )}
                     </FormRow>
                   </>
                 )}
@@ -227,8 +322,12 @@ export default function SettingsPage({
                   </SelectInput>
                 </FormRow>
                 <div className="py-3">
-                  <button className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors">
-                    TEST CONNECTION
+                  <button
+                    type="button"
+                    onClick={() => testConnection("ledger")}
+                    className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors"
+                  >
+                    {testing === "ledger" ? "CHECKING…" : "TEST CONNECTION"}
                   </button>
                 </div>
               </div>
@@ -268,8 +367,12 @@ export default function SettingsPage({
                   </>
                 )}
                 <div className="py-3">
-                  <button className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors">
-                    TEST CONNECTION
+                  <button
+                    type="button"
+                    onClick={() => testConnection("settlement")}
+                    className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors"
+                  >
+                    {testing === "settlement" ? "CHECKING…" : "TEST CONNECTION"}
                   </button>
                 </div>
               </div>
@@ -370,8 +473,8 @@ export default function SettingsPage({
                   <>
                     <FormRow label="API Key" note="Read-only. Regenerate to rotate.">
                       <div className="flex items-center gap-2">
-                        <TextInput value="lsk_live_••••••••••••••••••••••••••••••••" readOnly />
-                        <button className="font-mono text-[11px] text-[var(--status-warning)] border border-[var(--status-warning)]/30 px-3 py-2 hover:bg-[var(--status-warning)]/10 transition-colors shrink-0">ROTATE</button>
+                        <TextInput value={apiKey} readOnly />
+                        <button type="button" onClick={rotateApiKey} className="font-mono text-[11px] text-[var(--status-warning)] border border-[var(--status-warning)]/30 px-3 py-2 hover:bg-[var(--status-warning)]/10 transition-colors shrink-0">ROTATE</button>
                       </div>
                     </FormRow>
                     <FormRow label="Rate Limit" note="Requests per minute per key">
@@ -393,13 +496,17 @@ export default function SettingsPage({
                 </FormRow>
                 <FormRow label="Signing Secret" note="Used to verify webhook authenticity (HMAC-SHA256)">
                   <div className="flex items-center gap-2">
-                    <TextInput value={draft.webhookSecret} readOnly />
-                    <button className="font-mono text-[11px] text-[var(--status-warning)] border border-[var(--status-warning)]/30 px-3 py-2 hover:bg-[var(--status-warning)]/10 transition-colors shrink-0">ROTATE</button>
+                    <TextInput value={webhookSecret} readOnly />
+                    <button type="button" onClick={rotateWebhookSecret} className="font-mono text-[11px] text-[var(--status-warning)] border border-[var(--status-warning)]/30 px-3 py-2 hover:bg-[var(--status-warning)]/10 transition-colors shrink-0">ROTATE</button>
                   </div>
                 </FormRow>
                 <div className="py-3">
-                  <button className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors">
-                    SEND TEST PAYLOAD
+                  <button
+                    type="button"
+                    onClick={sendTestPayload}
+                    className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-2 hover:bg-[var(--primary)]/10 transition-colors"
+                  >
+                    {testing === "webhook" ? "SENDING…" : "SEND TEST PAYLOAD"}
                   </button>
                 </div>
               </div>

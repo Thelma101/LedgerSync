@@ -1,0 +1,6 @@
+date,description,amount,currency,reference,counterparty
+2026-11-08,NIBSS Instant Payment — Dangote Industries,48250000.00,NGN,NIBSS-NIP-20261108-0041,Dangote Industries Ltd
+2026-11-08,NEFT Credit — MTN Nigeria Invoice 8821,124875000.00,NGN,NEFT-MTN-20261108,MTN Nigeria Communications Plc
+2026-11-08,POS Settlement — Interswitch Batch 0091,19847320.00,NGN,ISW-BATCH-0091-20261108,Interswitch Financial Inclusion Services
+2026-11-08,Payroll NEFT — November Salary Run,284910500.00,NGN,PAYROLL-20261108-NOV,Systemspecs (Remita)
+2026-11-08,Interbank Overnight — First Bank,500000000.00,NGN,IBL-FNBL-20261108-RECON,First Bank of Nigeria Ltd

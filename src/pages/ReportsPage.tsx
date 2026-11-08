@@ -1,11 +1,14 @@
 import { useState } from "react";
-import { type ReconciliationRun } from "../data/transactions";
+import { type HistoryRow, type ScheduledReport } from "../data/reports";
+import { transactionsForRun, type ReconciliationRun, type Transaction } from "../data/transactions";
 import FormRow from "../components/FormRow";
 import TextInput from "../components/TextInput";
 import SelectInput from "../components/SelectInput";
 import Toggle from "../components/Toggle";
+import Flash from "../components/Flash";
 import { formatDateTime } from "../lib/datetime";
 import type { ReportsTab } from "../lib/route";
+import { useWorkspace } from "../lib/workspace";
 
 interface ReportConfig {
   name: string;
@@ -21,60 +24,37 @@ interface ReportConfig {
   notifyEmail: string;
 }
 
-interface ScheduledReport {
-  id: string;
-  name: string;
-  type: string;
-  frequency: string;
-  lastRun: string;
-  nextRun: string;
-  format: string;
-  recipients: string;
-  status: "active" | "paused";
+function downloadText(filename: string, body: string) {
+  const blob = new Blob([body], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-const SCHEDULED: ScheduledReport[] = [
-  {
-    id: "SCH-001",
-    name: "Daily EOD NIBSS Reconciliation Summary",
-    type: "Reconciliation Summary",
-    frequency: "Daily @ 17:00 WAT",
-    lastRun: "2026-08-23T16:00:12Z",
-    nextRun: "2026-08-24T16:00:00Z",
-    format: "PDF",
-    recipients: "controller@company.ng, cfo@company.ng",
-    status: "active",
-  },
-  {
-    id: "SCH-002",
-    name: "Weekly Exception & Break Report",
-    type: "Exception Detail",
-    frequency: "Weekly Mon @ 08:00 WAT",
-    lastRun: "2026-08-18T07:00:05Z",
-    nextRun: "2026-08-25T07:00:00Z",
-    format: "XLSX",
-    recipients: "audit@company.ng",
-    status: "active",
-  },
-  {
-    id: "SCH-003",
-    name: "Month-End CBN Audit Package",
-    type: "Full Audit",
-    frequency: "Monthly last biz day",
-    lastRun: "2026-07-31T20:00:00Z",
-    nextRun: "2026-08-29T20:00:00Z",
-    format: "ZIP (PDF + CSV)",
-    recipients: "external-auditor@kpmg.ng",
-    status: "paused",
-  },
-];
-
-const REPORT_HISTORY = [
-  { id: "RPT-20260824-001", name: "Daily EOD NIBSS Reconciliation Summary", generated: "2026-08-24T09:14:50Z", format: "PDF", size: "142 KB", run: "RUN-2026-08-24-001", status: "ready" },
-  { id: "RPT-20260823-003", name: "Weekly Exception & Break Report", generated: "2026-08-23T18:01:22Z", format: "XLSX", size: "88 KB", run: "RUN-2026-08-23-003", status: "ready" },
-  { id: "RPT-20260823-002", name: "Daily EOD NIBSS Reconciliation Summary", generated: "2026-08-23T16:00:45Z", format: "PDF", size: "131 KB", run: "RUN-2026-08-23-003", status: "ready" },
-  { id: "RPT-20260822-001", name: "Daily EOD NIBSS Reconciliation Summary", generated: "2026-08-22T16:00:33Z", format: "PDF", size: "119 KB", run: "RUN-2026-08-22-002", status: "ready" },
-];
+function buildReport(config: ReportConfig, run: ReconciliationRun, txs: Transaction[]) {
+  const rows = config.includeMatchedTx ? txs : txs.filter((t) => t.status !== "matched");
+  const lines = [
+    `LEDGERSYNC REPORT — ${config.name}`,
+    `Type: ${config.type}`,
+    `Run: ${run.id}`,
+    `Range: ${config.dateFrom} to ${config.dateTo}`,
+    `Format: ${config.format.toUpperCase()}`,
+    "",
+    config.includeSummary
+      ? `SUMMARY  matched=${run.matched} mismatch=${run.mismatched} missingStlmt=${run.missingSettlement} missingLedger=${run.missingLedger} partial=${run.partial}`
+      : "",
+    "",
+    config.includeExceptions ? "EXCEPTIONS" : "",
+    ...rows.map(
+      (t) =>
+        `${t.id}\t${t.status}\t${t.reference}\t${t.ledgerAmount ?? "N/A"}\t${t.settlementAmount ?? "N/A"}\t${t.delta ?? "N/A"}`,
+    ),
+  ].filter((line) => line !== "");
+  return lines.join("\n");
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -82,13 +62,27 @@ export default function ReportsPage({
   tab,
   onTabChange,
   runs,
+  transactions,
 }: {
   tab: ReportsTab;
   onTabChange: (tab: ReportsTab) => void;
   runs: ReconciliationRun[];
+  transactions: Transaction[];
 }) {
+  const { workspace, setScheduled, setReportHistory } = useWorkspace();
+  const scheduled = workspace.scheduled ?? [];
+  const history = workspace.reportHistory ?? [];
   const [submitted, setSubmitted] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [showScheduleForm, setShowScheduleForm] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<ScheduledReport | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState({ name: "", frequency: "Daily @ 17:00 WAT", recipients: "", format: "PDF" });
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  function flashMsg(message: string) {
+    setFlash(message);
+    window.setTimeout(() => setFlash(null), 2800);
+  }
   const [config, setConfig] = useState<ReportConfig>({
     name: "",
     type: "reconciliation_summary",
@@ -125,12 +119,107 @@ export default function ReportsPage({
     }
     setErrors(next);
     if (Object.keys(next).length > 0) return;
+    const run = runs.find((r) => r.id === config.runIds[0]) ?? runs[0];
+    if (!run) {
+      flashMsg("No reconciliation run to report on.");
+      return;
+    }
+    const txs = transactionsForRun(run.id, transactions);
+    const body = buildReport(config, run, txs);
+    const ext = config.format === "xlsx" ? "csv" : config.format === "csv" ? "csv" : "txt";
+    const filename = `${config.name.replace(/\s+/g, "_")}_${run.id}.${ext}`;
+    downloadText(filename, body);
+    const now = new Date().toISOString();
+    setReportHistory((h) => [
+      {
+        id: `RPT-${now.slice(0, 10).replace(/-/g, "")}-${String(h.length + 1).padStart(3, "0")}`,
+        name: config.name,
+        generated: now,
+        format: config.format.toUpperCase(),
+        size: `${Math.max(1, Math.round(body.length / 1024))} KB`,
+        run: run.id,
+        status: "ready",
+        body,
+      },
+      ...h,
+    ]);
     setSubmitted(true);
+    flashMsg(`Downloaded ${filename}`);
     setTimeout(() => setSubmitted(false), 3000);
+  }
+
+  function saveTemplate() {
+    if (!config.name.trim()) {
+      setErrors({ name: "Name the report before saving a template." });
+      return;
+    }
+    flashMsg(`Template saved locally: ${config.name}`);
+  }
+
+  function openNewSchedule() {
+    setEditingSchedule(null);
+    setScheduleDraft({ name: "", frequency: "Daily @ 17:00 WAT", recipients: "", format: "PDF" });
+    setShowScheduleForm(true);
+  }
+
+  function openEditSchedule(s: ScheduledReport) {
+    setEditingSchedule(s);
+    setScheduleDraft({ name: s.name, frequency: s.frequency, recipients: s.recipients, format: s.format });
+    setShowScheduleForm(true);
+  }
+
+  function saveSchedule(e: React.FormEvent) {
+    e.preventDefault();
+    if (!scheduleDraft.name.trim()) {
+      flashMsg("Schedule name is required.");
+      return;
+    }
+    if (editingSchedule) {
+      setScheduled((list) =>
+        list.map((s) => (s.id === editingSchedule.id ? { ...s, ...scheduleDraft } : s)),
+      );
+      flashMsg(`Updated ${scheduleDraft.name}`);
+    } else {
+      const id = `SCH-${String(scheduled.length + 1).padStart(3, "0")}`;
+      setScheduled((list) => [
+        {
+          id,
+          name: scheduleDraft.name,
+          type: "Reconciliation Summary",
+          frequency: scheduleDraft.frequency,
+          lastRun: "—",
+          nextRun: new Date().toISOString(),
+          format: scheduleDraft.format,
+          recipients: scheduleDraft.recipients || "controller@company.ng",
+          status: "active",
+        },
+        ...list,
+      ]);
+      flashMsg(`Scheduled ${scheduleDraft.name}`);
+    }
+    setShowScheduleForm(false);
+    setEditingSchedule(null);
+  }
+
+  function toggleSchedule(id: string) {
+    setScheduled((list) =>
+      list.map((s) => {
+        if (s.id !== id) return s;
+        const next = s.status === "active" ? "paused" : "active";
+        flashMsg(`${s.name} ${next === "paused" ? "paused" : "resumed"}`);
+        return { ...s, status: next as ScheduledReport["status"] };
+      }),
+    );
+  }
+
+  function downloadHistory(row: HistoryRow) {
+    downloadText(`${row.id}.${row.format.toLowerCase() === "xlsx" ? "csv" : "txt"}`, row.body);
+    flashMsg(`Downloaded ${row.id}`);
   }
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden w-full min-h-0">
+      <Flash message={flash} />
       {/* sub-nav */}
       <div className="flex items-center gap-0 px-3 sm:px-5 border-b border-[var(--border)] bg-[var(--card)] h-9 shrink-0 overflow-x-auto">
         {(["generate", "scheduled", "history"] as const).map(t => (
@@ -255,7 +344,7 @@ export default function ReportsPage({
                 >
                   {submitted ? "✓ QUEUED FOR GENERATION" : "GENERATE REPORT"}
                 </button>
-                <button type="button" className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-4 py-2 hover:bg-[var(--secondary)] transition-colors">
+                <button type="button" onClick={saveTemplate} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-4 py-2 hover:bg-[var(--secondary)] transition-colors">
                   SAVE AS TEMPLATE
                 </button>
               </div>
@@ -273,13 +362,46 @@ export default function ReportsPage({
                   Automated report delivery configured for your organization.
                 </p>
               </div>
-              <button className="font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1.5 hover:opacity-90 transition-opacity">
+              <button type="button" onClick={openNewSchedule} className="font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1.5 hover:opacity-90 transition-opacity">
                 + NEW SCHEDULE
               </button>
             </div>
 
+            {showScheduleForm && (
+              <form onSubmit={saveSchedule} className="bg-[var(--card)] border border-[var(--border)] px-5 mb-4">
+                <FormRow label="Name" required>
+                  <TextInput value={scheduleDraft.name} onChange={(v) => setScheduleDraft((d) => ({ ...d, name: v }))} placeholder="e.g. Daily EOD Summary" />
+                </FormRow>
+                <FormRow label="Frequency">
+                  <SelectInput value={scheduleDraft.frequency} onChange={(v) => setScheduleDraft((d) => ({ ...d, frequency: v }))}>
+                    <option value="Daily @ 17:00 WAT">Daily @ 17:00 WAT</option>
+                    <option value="Weekly Mon @ 08:00 WAT">Weekly Mon @ 08:00 WAT</option>
+                    <option value="Monthly last biz day">Monthly last biz day</option>
+                  </SelectInput>
+                </FormRow>
+                <FormRow label="Format">
+                  <SelectInput value={scheduleDraft.format} onChange={(v) => setScheduleDraft((d) => ({ ...d, format: v }))}>
+                    <option value="PDF">PDF</option>
+                    <option value="XLSX">XLSX</option>
+                    <option value="CSV">CSV</option>
+                  </SelectInput>
+                </FormRow>
+                <FormRow label="Recipients">
+                  <TextInput value={scheduleDraft.recipients} onChange={(v) => setScheduleDraft((d) => ({ ...d, recipients: v }))} placeholder="controller@company.ng" />
+                </FormRow>
+                <div className="py-3 flex gap-2">
+                  <button type="submit" className="font-mono text-[11px] bg-[var(--primary)] text-[var(--primary-foreground)] px-3 py-1.5 hover:opacity-90">
+                    {editingSchedule ? "SAVE SCHEDULE" : "CREATE SCHEDULE"}
+                  </button>
+                  <button type="button" onClick={() => { setShowScheduleForm(false); setEditingSchedule(null); }} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--secondary)]">
+                    CANCEL
+                  </button>
+                </div>
+              </form>
+            )}
+
             <div className="space-y-2">
-              {SCHEDULED.map(s => (
+              {scheduled.map(s => (
                 <div key={s.id} className="bg-[var(--card)] border border-[var(--border)]">
                   <div className="flex items-start gap-4 px-4 py-3">
                     <div className="flex-1 min-w-0">
@@ -295,7 +417,7 @@ export default function ReportsPage({
                           ["Format", s.format],
                           ["Frequency", s.frequency],
                           ["Recipients", s.recipients],
-                          ["Last Run", formatDateTime(s.lastRun)],
+                          ["Last Run", s.lastRun === "—" ? "—" : formatDateTime(s.lastRun)],
                           ["Next Run", formatDateTime(s.nextRun)],
                         ].map(([k, v]) => (
                           <div key={k} className="flex gap-2">
@@ -306,8 +428,8 @@ export default function ReportsPage({
                       </div>
                     </div>
                     <div className="flex flex-col gap-1.5 shrink-0">
-                      <button className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-1 hover:bg-[var(--primary)]/10 transition-colors">EDIT</button>
-                      <button className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-1 hover:bg-[var(--secondary)] transition-colors">
+                      <button type="button" onClick={() => openEditSchedule(s)} className="font-mono text-[11px] text-[var(--primary)] border border-[var(--primary)]/30 px-3 py-1 hover:bg-[var(--primary)]/10 transition-colors">EDIT</button>
+                      <button type="button" onClick={() => toggleSchedule(s.id)} className="font-mono text-[11px] text-[var(--muted-foreground)] border border-[var(--border)] px-3 py-1 hover:bg-[var(--secondary)] transition-colors">
                         {s.status === "active" ? "PAUSE" : "RESUME"}
                       </button>
                     </div>
@@ -335,7 +457,7 @@ export default function ReportsPage({
                 </tr>
               </thead>
               <tbody>
-                {REPORT_HISTORY.map(r => (
+                {history.map(r => (
                   <tr key={r.id} className="border-b border-[var(--border)] hover:bg-[var(--secondary)] transition-colors">
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--primary)]">{r.id}</td>
                     <td className="px-3 py-2.5 text-xs text-[var(--foreground)] max-w-[200px] truncate">{r.name}</td>
@@ -346,7 +468,7 @@ export default function ReportsPage({
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--foreground)]">{r.format}</td>
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--muted-foreground)]">{r.size}</td>
                     <td className="px-3 py-2.5">
-                      <button className="font-mono text-[11px] text-[var(--primary)] hover:underline">DOWNLOAD</button>
+                      <button type="button" onClick={() => downloadHistory(r)} className="font-mono text-[11px] text-[var(--primary)] hover:underline">DOWNLOAD</button>
                     </td>
                   </tr>
                 ))}
